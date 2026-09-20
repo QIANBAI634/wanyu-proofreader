@@ -30,6 +30,7 @@ def find_pdftotext():
         return "pdftotext"
     # 2. 常见安装位置（Git for Windows 自带 poppler）
     candidates = [
+        Path(r"D:\Git\mingw64\bin\pdftotext.exe"),
         Path(r"C:\Program Files\Git\mingw64\bin\pdftotext.exe"),
         Path(r"C:\Program Files\Git\usr\bin\pdftotext.exe"),
         Path(r"C:\Program Files\poppler\bin\pdftotext.exe"),
