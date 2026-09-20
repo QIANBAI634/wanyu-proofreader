@@ -18,12 +18,36 @@ extract_text.py — 从数字原生 PDF 提取文本层（#120 选型参考的�
 import argparse
 import subprocess
 import sys
+import shutil
 from pathlib import Path
+
+
+def find_pdftotext():
+    """定位 pdftotext 可执行文件，返回命令（字符串或路径）。"""
+    # 1. 优先用 PATH 里的
+    found = shutil.which("pdftotext")
+    if found:
+        return "pdftotext"
+    # 2. 常见安装位置（Git for Windows 自带 poppler）
+    candidates = [
+        Path(r"C:\Program Files\Git\mingw64\bin\pdftotext.exe"),
+        Path(r"C:\Program Files\Git\usr\bin\pdftotext.exe"),
+        Path(r"C:\Program Files\poppler\bin\pdftotext.exe"),
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return None
 
 
 def extract_text(pdf_path, first=1, last=None, layout=True):
     """调用 pdftotext 提取文本层，返回字符串。"""
-    cmd = ["pdftotext"]
+    pdftotext = find_pdftotext()
+    if pdftotext is None:
+        raise RuntimeError(
+            "未找到 pdftotext。请安装 poppler-utils，或把 pdftotext 加入 PATH。"
+        )
+    cmd = [pdftotext]
     if layout:
         cmd.append("-layout")
     cmd.extend(["-f", str(first)])
