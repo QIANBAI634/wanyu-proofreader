@@ -544,6 +544,8 @@ func (s *importService) runWorker() {
 				s.processCSV(work)
 			case "pdf":
 				s.processPDF(work)
+			case "ocr":
+				s.processOCR(work)
 			}
 		}()
 	}
@@ -567,6 +569,9 @@ func (s *importService) recoverPendingWork() {
 			kind := "csv"
 			if job.GetString("status") == "inspecting" {
 				kind = "csv_inspect"
+			}
+			if job.GetString("mode") == "ocr" {
+				kind = "ocr"
 			}
 			s.enqueue(importWork{kind: kind, id: job.Id, requestID: "recovery-" + job.Id})
 		}
@@ -618,7 +623,7 @@ func (s *importService) markFatal(work importWork, code, message string, cause e
 	}
 	record.Set("error_code", code)
 	record.Set("error_message", message)
-	if work.kind == "csv" || work.kind == "csv_inspect" {
+	if work.kind == "csv" || work.kind == "csv_inspect" || work.kind == "ocr" {
 		record.Set("finished_at", types.NowDateTime())
 	}
 	var cleanup func() error

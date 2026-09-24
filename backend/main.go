@@ -58,6 +58,7 @@ func main() {
 
 	importer := newImportService(app)
 	importer.register()
+	importer.registerOCR()
 	importer.registerPDFPreview()
 	importer.registerPagination()
 
