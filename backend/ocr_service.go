@@ -54,14 +54,18 @@ func (s *importService) startOCR(c *core.RequestEvent) error {
 		"project":           projectID,
 		"created_by":        auth.Id,
 		"original_filename": project.GetString("name") + " OCR",
-		"mode":              "ocr",
-		"status":            "queued",
-		"total_count":       0,
-		"processed_count":   0,
-		"success_count":     0,
-		"failed_count":      0,
-		"project_file":      projectFileID,
-		"pdf_page_limit":    pdfPageLimit,
+		// OCR 作业不携带源文件；source_file 已在迁移中改为可选。
+		// file_hash/file_size 也无需填充（OCR 针对已上传的项目主 PDF）。
+		"file_hash":       "",
+		"file_size":       0,
+		"mode":            "ocr",
+		"status":          "queued",
+		"total_count":     0,
+		"processed_count": 0,
+		"success_count":   0,
+		"failed_count":    0,
+		"project_file":    projectFileID,
+		"pdf_page_limit":  pdfPageLimit,
 	})
 	if err := form.Submit(); err != nil {
 		logUploadRejected(requestID, "ocr", projectID, "record_create", "OCR job creation failed", err)
