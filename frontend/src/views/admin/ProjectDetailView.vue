@@ -186,6 +186,32 @@
               </div>
             </div>
           </div>
+
+          <!-- OCR recognition -->
+          <div>
+            <h4 class="font-semibold mb-2">OCR 识别</h4>
+            <p class="text-sm text-muted mb-3">
+              对项目主 PDF 发起识别，把页面文字识别为结构化条目。识别能力尚未接入真实引擎前，会提示当前不可用。
+            </p>
+            <button
+              class="btn btn-secondary"
+              @click="startOcrRecognition"
+              :disabled="ocrRunning"
+            >
+              {{ ocrRunning ? '识别进行中...' : '发起识别' }}
+            </button>
+            <div v-if="ocrJob" class="import-job-card mt-3">
+              <div class="flex items-center justify-between gap-2">
+                <strong>{{ ocrJobStatusLabel }}</strong>
+                <span class="text-sm text-muted">作业 {{ ocrJob.id }}</span>
+              </div>
+              <div v-if="ocrJob.error_message" class="text-sm text-muted mt-2">{{ ocrJob.error_message }}</div>
+              <div v-if="ocrJob.status === 'completed'" class="alert alert-success mt-2">
+                识别完成，结果已生成，可进入校对或导出流程查看。
+              </div>
+            </div>
+            <div v-if="ocrError" class="alert alert-error mt-2" style="white-space:pre-line">{{ ocrError }}</div>
+          </div>
         </div>
       </section>
 
@@ -413,7 +439,7 @@ import {
 import { createProjectPdf, getProjectFile, listProjectPdfUploads, cancelProjectPdfUpload } from '@/services/projectFilesService'
 import { validatePdfFile, loadPdfUploadResume, clearPdfUploadResume } from '@/lib/chunkedPdfUpload'
 import { currentUserId } from '@/services/authService'
-import { commitCsvImport, createCsvInspection, getImportJob, listImportJobErrors } from '@/services/importJobsService'
+import { commitCsvImport, createCsvInspection, getImportJob, listImportJobErrors, startOcr } from '@/services/importJobsService'
 import { csvFatalMessage, parseCsvInspection } from '@/lib/csvInspection'
 import { toSafeCsvCell } from '@/lib/csvExport'
 import { getProject } from '@/services/projectsService'
@@ -459,6 +485,9 @@ const csvSuccess = ref('')
 const csvError = ref('')
 const csvJob = ref(null)
 const csvImportErrors = ref([])
+const ocrJob = ref(null)
+const ocrError = ref('')
+const ocrRunning = ref(false)
 const exportingCsv = ref(false)
 const exportError = ref('')
 const exportSuccess = ref('')
@@ -505,6 +534,13 @@ const csvJobStatusLabel = computed(() => ({
   failed: '导入失败'
 })[csvJob.value?.status] || '准备导入')
 const csvInspection = computed(() => parseCsvInspection(csvJob.value?.inspection_json))
+const ocrJobStatusLabel = computed(() => ({
+  queued: '等待识别',
+  processing: '识别进行中',
+  completed: '识别完成',
+  completed_with_errors: '识别完成，部分失败',
+  failed: '识别失败'
+})[ocrJob.value?.status] || '未开始')
 const csvPreviewHeaders = computed(() => csvInspection.value?.headers.slice(0, 6) || [])
 const pdfResumeExpired = computed(() => Boolean(pdfResume.value?.expired))
 
@@ -824,6 +860,29 @@ async function confirmCsvImport() {
 
 function pollDelay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function startOcrRecognition() {
+  if (ocrRunning.value) return
+  ocrRunning.value = true
+  ocrError.value = ''
+  ocrJob.value = null
+  try {
+    let job = await startOcr({ projectId })
+    ocrJob.value = job
+    while (['queued', 'processing'].includes(job.status)) {
+      await pollDelay(1000)
+      job = await getImportJob(job.id)
+      ocrJob.value = job
+    }
+    if (job.status === 'failed') {
+      ocrError.value = job.error_message || '识别失败，请稍后重试。'
+    }
+  } catch (e) {
+    ocrError.value = getPbMessage(e, '发起识别失败，请稍后重试。')
+  } finally {
+    ocrRunning.value = false
+  }
 }
 
 async function exportCsv() {

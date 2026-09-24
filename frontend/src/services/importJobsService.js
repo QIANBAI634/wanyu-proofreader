@@ -28,6 +28,13 @@ export async function commitCsvImport(jobId) {
   })
 }
 
+export async function startOcr({ projectId }) {
+  return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/imports/ocr`, {
+    method: 'POST',
+    requestKey: null
+  })
+}
+
 export async function getImportJob(jobId) {
   return pb.collection('import_jobs').getOne(jobId, {
     requestKey: null
