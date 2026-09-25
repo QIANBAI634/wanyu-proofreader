@@ -110,5 +110,43 @@ class TestCerbounded(unittest.TestCase):
         self.assertLessEqual(r["字级准确率"], 1.0)
 
 
+class TestNoData(unittest.TestCase):
+    def test_no_match_is_not_full_score(self):
+        # 阻断1：一个都没比对时，不能报字级准确率 1.0
+        gold = [{"页码": "1", "词头": "a", "音读": "b", "释义": "c"}]
+        test = [{"页码": "999", "词头": "x", "音读": "y", "释义": "z"}]
+        r = score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
+        # 没有共同键 → 匹配行数 0，字级准确率应为 None（无数据），不是 1.0
+        self.assertEqual(r["匹配行数"], 0)
+        self.assertIsNone(r["字级准确率"])
+
+
+class TestDuplicateKey(unittest.TestCase):
+    def test_duplicate_key_not_dropped(self):
+        # 阻断2：--key 遇到重复键不能静默丢行
+        gold = [
+            {"页码": "1", "词头": "㨄", "音读": "b", "释义": "c"},
+            {"页码": "1", "词头": "㧟", "音读": "e", "释义": "f"},
+            {"页码": "1", "词头": "㨄", "音读": "h", "释义": "i"},
+            {"页码": "1", "词头": "㧟", "音读": "k", "释义": "l"},
+        ]
+        test = [dict(r) for r in gold]  # 完全一致
+        r_key = score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
+        r_row = score(gold, test, ["页码", "词头", "音读", "释义"])
+        # 难字总数应与行序模式一致（不能因重复键丢 3/4 数据）
+        self.assertEqual(r_key["难字总数"], r_row["难字总数"])
+        self.assertEqual(r_key["列归属准确率"], 1.0)
+
+
+class TestIpaCharset(unittest.TestCase):
+    def test_eng_is_hard(self):
+        # 阻断3：ŋ（软颚鼻音）必须是难字，ŋ→n 必须检出静默替换
+        gold = [{"词头": "ɛŋʔ", "音读": "a", "释义": "x"}]
+        test = [{"词头": "ɛnʔ", "音读": "a", "释义": "x"}]
+        r = score(gold, test, FIELDS)
+        self.assertGreater(r["难字总数"], 0)
+        self.assertGreater(r["静默替换率"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

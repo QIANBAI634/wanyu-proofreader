@@ -26,6 +26,8 @@ pb_data/*
 !pb_data/.gitignore
 backend/pb_data/
 backend/pocketbase
+backend/pocketbase.exe
+backend/pocketbase.exe~
 
 # OS
 .DS_Store

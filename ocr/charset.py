@@ -1,12 +1,14 @@
 """难字 / 弃权字符集定义（#120 打分脚本共享）。
 
-范围与仓库基线对齐：
-- frontend/src/lib/rareCharacters.js 的罕见字判定
-- scripts/corpus_probe/detectors.py 的 CJK 扩展区段
-- backend/keyboards/ 的目标字符集（IPA 与鼻化附加符）
-
-集中在此定义，避免 score.py 再手抄一份导致不一致。
+范围与仓库基线对齐，不再手抄：
+- 罕见汉字：frontend/src/lib/rareCharacters.js 的判定区间
+- 音标字符：scripts/corpus_probe/detectors.py 的 PHONETIC_RUN（运行时 import，保证一致）
+- 带圈序号 / 上标调号：本文件内固定集合
 """
+
+import re
+import sys
+from pathlib import Path
 
 # 罕见汉字区段（与 rareCharacters.js 对齐）
 RARE_CJK_RANGES = (
@@ -17,17 +19,32 @@ RARE_CJK_RANGES = (
     (0x30000, 0x3347F),   # CJK Extension G
 )
 
-# IPA 音标块（U+0250–U+02AF），含鼻化附加符 U+0303 等
-IPA_BLOCK = (0x0250, 0x02AF)
-
-# 鼻化/变音附加符与声调符号（常用在莆仙 IPA 上标）
-IPA_DIACRITICS = frozenset(
-    "Ǿã̃ḁ̩̯̃̃̄̆́̀̂̌̋̏ʰʲʷˠˤʳ"
-)
-
 # 带圈序号 ①–⑳ 与上标调号 ¹–⁰
 CIRCLED = frozenset("①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳")
 SUPERSCRIPT = frozenset("¹²³⁴⁵⁶⁷⁸⁹⁰")
+
+# 组合用鼻化/变音附加符（U+0300–U+036F 区段，超出 PHONETIC_RUN 覆盖）
+_COMBINING_DIACRITICS = (0x0300, 0x036F)
+
+
+def _load_phonetic_charset():
+    """从 scripts/corpus_probe/detectors.py 的 PHONETIC_RUN 提取音标字符集。
+
+    保证与仓库唯一权威字集一致，不在这里手抄第三份清单。
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    detectors = repo_root / "scripts" / "corpus_probe" / "detectors.py"
+    if not detectors.is_file():
+        # 无法定位 detectors 时退回最小 IPA 块，避免脚本完全不可用
+        return frozenset(), (0x0250, 0x02AF)
+    src = detectors.read_text(encoding="utf-8")
+    m = re.search(r"PHONETIC_RUN = re\.compile\(\s*r\"\[([^\]]*)\]", src)
+    if not m:
+        return frozenset(), (0x0250, 0x02AF)
+    return frozenset(m.group(1)), (0x0250, 0x02AF)
+
+
+_PHONETIC_CHARS, _IPA_BLOCK = _load_phonetic_charset()
 
 
 def in_ranges(code, ranges):
@@ -40,8 +57,10 @@ def is_rare_cjk(ch):
 
 
 def is_ipa(ch):
-    """是否 IPA 音标或鼻化/变音附加符。"""
-    return in_ranges(ord(ch), (IPA_BLOCK,)) or ch in IPA_DIACRITICS
+    """是否 IPA 音标 / 音标用拉丁变音字母 / 鼻化附加符。"""
+    if ch in _PHONETIC_CHARS:
+        return True
+    return in_ranges(ord(ch), (_IPA_BLOCK, _COMBINING_DIACRITICS))
 
 
 def is_hard_char(ch):

@@ -115,15 +115,28 @@ def score(gold_rows, test_rows, fields, key=None):
 
     # ── 行对齐 ──
     if key:
-        gold_by_key = {str(r.get(key, "")): r for r in gold_rows}
-        test_by_key = {str(r.get(key, "")): r for r in test_rows}
-        gold_keys = set(gold_by_key)
-        test_keys = set(test_by_key)
-        common = gold_keys & test_keys
-        only_gold = gold_keys - test_keys
-        only_test = test_keys - gold_keys
-        pairs = [(gold_by_key[k], test_by_key[k]) for k in common]
-        matched_rows = len(common)
+        # 按键列分组（列表，支持同键多行，避免字典覆盖丢行）
+        gold_by_key = {}
+        for r in gold_rows:
+            gold_by_key.setdefault(str(r.get(key, "")), []).append(r)
+        test_by_key = {}
+        for r in test_rows:
+            test_by_key.setdefault(str(r.get(key, "")), []).append(r)
+        common = set(gold_by_key) & set(test_by_key)
+        only_gold = set(gold_by_key) - set(test_by_key)
+        only_test = set(test_by_key) - set(gold_by_key)
+        # 同键多行时，按行序逐一配对（多退少补）
+        pairs = []
+        for k in common:
+            g_rows = gold_by_key[k]
+            t_rows = test_by_key[k]
+            for i in range(max(len(g_rows), len(t_rows))):
+                g = g_rows[i] if i < len(g_rows) else {}
+                t = t_rows[i] if i < len(t_rows) else {}
+                pairs.append((g, t))
+        matched_rows = sum(
+            min(len(gold_by_key[k]), len(test_by_key[k])) for k in common
+        )
     else:
         n = max(n_gold, n_test)
         pairs = [
@@ -180,28 +193,41 @@ def score(gold_rows, test_rows, fields, key=None):
                         # 难字被换成常见字 → 静默替换
                         silent_replace += 1
 
-    cell_accuracy = matched_cells / total_cells if total_cells else 0.0
-    cer = min(1.0, total_char_errors / total_chars) if total_chars else 0.0
+    # 没有任何可比对单元格/字符时，指标标记为「无数据」，不得报满分（0/1）。
+    no_data = total_cells == 0
+
+    if no_data:
+        cell_accuracy = None
+        cer = None
+        hard_coverage = None
+        silent_replace_rate = None
+        representability = None
+    else:
+        cell_accuracy = matched_cells / total_cells
+        cer = min(1.0, total_char_errors / total_chars) if total_chars else 0.0
+        hard_covered = hard_correct + hard_abstained
+        hard_coverage = hard_covered / hard_total if hard_total else 0.0
+        silent_replace_rate = silent_replace / hard_total if hard_total else 0.0
+        representability = 1 - (hard_missing / hard_total) if hard_total else 0.0
+
     # 行对齐率 = 按键值/行序实际匹配上的行数比例
     row_alignment = matched_rows / n_gold if n_gold else 0.0
 
-    hard_covered = hard_correct + hard_abstained
-    hard_coverage = hard_covered / hard_total if hard_total else 0.0
-    silent_replace_rate = silent_replace / hard_total if hard_total else 0.0
-    representability = 1 - (hard_missing / hard_total) if hard_total else 0.0
+    def fmt(v):
+        return None if v is None else round(v, 4)
 
     return {
         "标准行数": n_gold,
         "待测行数": n_test,
         "匹配行数": matched_rows,
         "行对齐率": round(row_alignment, 4),
-        "列归属准确率": round(cell_accuracy, 4),
-        "字级错误率 CER": round(cer, 4),
-        "字级准确率": round(1 - cer, 4),
+        "列归属准确率": fmt(cell_accuracy),
+        "字级错误率 CER": fmt(cer),
+        "字级准确率": None if cer is None else round(1 - cer, 4),
         "难字总数": hard_total,
-        "生僻字覆盖": round(hard_coverage, 4),
-        "静默替换率": round(silent_replace_rate, 4),
-        "集外字可表示性": round(representability, 4),
+        "生僻字覆盖": fmt(hard_coverage),
+        "静默替换率": fmt(silent_replace_rate),
+        "集外字可表示性": fmt(representability),
         "仅标准答案有": only_gold if isinstance(only_gold, int) else len(only_gold),
         "仅待测结果有": only_test if isinstance(only_test, int) else len(only_test),
     }
