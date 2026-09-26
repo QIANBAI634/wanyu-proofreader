@@ -1,0 +1,144 @@
+{
+  "note": "合成样例：只用于验证弱标注与打分工具自身正确，不代表线上表现（#179 前置事实）。",
+  "roles": {
+    "词条": "headword",
+    "拼音": "reading",
+    "莆田IPA": "reading",
+    "释义": "meaning"
+  },
+  "expected": {
+    "R1": {
+      "hits": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "precision": null,
+      "recall": 0,
+      "gate": "off",
+      "basis": "n/a"
+    },
+    "R2": {
+      "hits": 3,
+      "tp": 1,
+      "fp": 2,
+      "fn": 0,
+      "precision": 0.3333,
+      "recall": 1,
+      "gate": "off",
+      "basis": "n/a"
+    },
+    "R3": {
+      "hits": 1,
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0,
+      "recall": 0,
+      "gate": "off",
+      "basis": "n/a"
+    },
+    "R5": {
+      "hits": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1,
+      "recall": 0.5,
+      "gate": "off",
+      "basis": "n/a"
+    },
+    "R6 long_digit_run": {
+      "hits": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "precision": null,
+      "recall": 0,
+      "gate": "off",
+      "basis": "n/a"
+    },
+    "R6 tone_token_count_differs": {
+      "hits": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "precision": null,
+      "recall": 0,
+      "gate": "off",
+      "basis": "n/a"
+    }
+  },
+  "unicode_equivalent_excluded": 1,
+  "negative_pairs": [
+    "A1/莆田IPA",
+    "A4/释义"
+  ],
+  "pages": [
+    {
+      "id": "P1",
+      "project": "proj-a",
+      "final_row_json": "{\"词条\":\"甲\",\"拼音\":\"ka55\",\"莆田IPA\":\"kɑ55\",\"释义\":\"第一\"}",
+      "status": "arbitration"
+    },
+    {
+      "id": "P2",
+      "project": "proj-a",
+      "final_row_json": "{\"词条\":\"乙\",\"拼音\":\"pa55\",\"莆田IPA\":\"pa55\",\"释义\":\"第二\"}",
+      "status": "arbitration"
+    },
+    {
+      "id": "P3",
+      "project": "proj-a",
+      "final_row_json": "{\"词条\":\"丙\",\"拼音\":\"ã\",\"莆田IPA\":\"ã\",\"释义\":\"第三\"}",
+      "status": "arbitration"
+    },
+    {
+      "id": "P4",
+      "project": "proj-a",
+      "final_row_json": "{\"词条\":\"丁\",\"拼音\":\"ke55\",\"莆田IPA\":\"ke55\",\"释义\":\"第四\"}",
+      "status": "arbitration"
+    }
+  ],
+  "attempts": [
+    {
+      "id": "A1",
+      "page": "P1",
+      "project": "proj-a",
+      "round": 1,
+      "kind": "proofread",
+      "proofreader": "user-1",
+      "row_json": "{\"词条\":\"甲\",\"拼音\":\"ka55\",\"莆田IPA\":\"ka55\",\"释义\":\"第一\"}",
+      "submitted_at": "2026-09-20"
+    },
+    {
+      "id": "A2",
+      "page": "P2",
+      "project": "proj-a",
+      "round": 1,
+      "kind": "proofread",
+      "proofreader": "user-2",
+      "row_json": "{\"词条\":\"乙\",\"拼音\":\"pa55\",\"莆田IPA\":\"pa55\",\"释义\":\"第二\"}",
+      "submitted_at": "2026-09-20"
+    },
+    {
+      "id": "A3",
+      "page": "P3",
+      "project": "proj-a",
+      "round": 1,
+      "kind": "proofread",
+      "proofreader": "user-3",
+      "row_json": "{\"词条\":\"丙\",\"拼音\":\"ã\",\"莆田IPA\":\"ã\",\"释义\":\"第三\"}",
+      "submitted_at": "2026-09-20"
+    },
+    {
+      "id": "A4",
+      "page": "P4",
+      "project": "proj-a",
+      "round": 1,
+      "kind": "proofread",
+      "proofreader": "user-4",
+      "row_json": "{\"词条\":\"丁\",\"拼音\":\"ke55\",\"莆田IPA\":\"ke55\",\"释义\":\"\"}",
+      "submitted_at": "2026-09-20"
+    }
+  ]
+}

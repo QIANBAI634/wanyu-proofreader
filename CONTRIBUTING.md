@@ -22,7 +22,7 @@
 - 从最新 `main` 创建分支；一个分支只处理一个可独立合并的问题。
 - 推荐分支名：`feat/<summary>`、`fix/<summary>`、`docs/<summary>`、`ci/<summary>`、`chore/<summary>`。
 - 提交信息与 PR 标题使用 Conventional Commits，例如 `fix(auth): preserve session on transient errors`、`ci: add frontend checks`。
-- `scope` 必须是有归属的领域或模块，从现有词表里选：`auth`、`identity`、`projects`、`proofreading`、`onboarding`、`keyboards`、`pdf`、`upload`、`import`、`profiles`、`rare-chars`、`pagination`、`probe`（`scripts/corpus_probe/**`，离线语料探测与疑点规则）、`quality`、`migrations`、`ops`、`deps`、`ci`、`governance`（`.github/**` 与仓库治理文档、审批与权限边界）。词表里没有合适项时，在 PR 描述中说明新 scope 对应哪个目录或领域，再补进本表。
+- `scope` 必须是有归属的领域或模块，从现有词表里选：`auth`、`identity`、`projects`、`proofreading`、`onboarding`、`keyboards`、`pdf`、`upload`、`import`、`profiles`、`rare-chars`、`pagination`、`probe`（`scripts/corpus_probe/**`，离线语料探测与疑点规则）、`findings`（`review_findings` 数据模型、门控与只读接口）、`assist`（辅助层：`scripts/assist/**` 的弱标注与打分、`backend/pb_hooks/lib/assist_*.js` 的规则/难度/跨行判定）、`quality`、`migrations`、`ops`、`deps`、`ci`、`governance`（`.github/**` 与仓库治理文档、审批与权限边界）。词表里没有合适项时，在 PR 描述中说明新 scope 对应哪个目录或领域，再补进本表。
 - 不要用阶段、版本或计划代号作 scope（`v2`、`v3`、`phase1`、`M1` 等），也不要用整层名字（`frontend`、`backend`、`core`）：它们不携带责任域信息，changelog 无法据此归类。一支 PR 确实跨两个领域时，scope 写主要的那个，另一个写在 PR 描述里，不要用「A 与 B」拼标题回避 scope 选择。
 - PR 标题与提交信息的首行都不带 issue 编号（`(#131)`、`(#131) (#132)`、`fix #132` 等）。issue 关联只写在 PR 正文的「关联 Issue」里：完成用 `Closes #123` / `Fixes #123`，只覆盖一部分用 `Related to #123` 并说明遗留范围。Squash and merge 会把 PR 正文带进提交说明，关联不会因为标题里没有编号而丢失；标题里出现编号几乎总是一个来源错误：把合并后自动生成的提交信息回填成了 PR 标题。
 - 不提交构建产物、`.env`、PocketBase 数据目录或无关格式化改动。
