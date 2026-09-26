@@ -15,6 +15,7 @@
   { "suite": "assist_rules_integration.mjs", "ci_matrix": true },
   { "suite": "assist_baseline_integration.mjs", "ci_matrix": true },
   { "suite": "difficulty_integration.mjs", "ci_matrix": true },
+  { "suite": "identity_integration.mjs", "ci_matrix": true },
   { "suite": "pdf_chunks_integration.mjs", "ci_matrix": false, "note": "also runs in core-workflows and the chunk-upload-browser job" },
   { "suite": "rare_characters_integration.mjs", "ci_matrix": false, "ci_runner": "run_rare_characters_integration.py", "note": "restarts the server to prove persistence" }
 ]

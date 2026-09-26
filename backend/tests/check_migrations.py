@@ -71,6 +71,16 @@ SPECS = {
                    ('p', 'A'), 'idx_pages_project_tier')],
         'collection_indexes': ('pages', 'idx_pages_project_tier'),
     },
+    '1789113800_entry_identity.js': {
+        'indexes': ['idx_pages_project_identity', 'idx_dismissal_group'],
+        'plans': [
+            ('pages', 'SELECT id FROM pages WHERE project=? AND entry_identity_key=?',
+             ('p', 'k'), 'idx_pages_project_identity'),
+            ('finding_dismissals', 'SELECT id FROM finding_dismissals WHERE project=? AND group_key=? AND kind=?',
+             ('p', 'k', 'duplicate_identity'), 'idx_dismissal_group'),
+        ],
+        'collection_indexes': ('pages', 'idx_pages_project_identity'),
+    },
 }
 FIRST = '1788940000_initial_schema.js'
 

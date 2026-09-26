@@ -14,6 +14,7 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url))
 const detectors = path.join(here, '..', '..', 'scripts', 'corpus_probe', 'detectors.py')
 const rulesLib = path.join(here, '..', '..', 'backend', 'pb_hooks', 'lib', 'assist_rules.js')
+const identityLib = path.join(here, '..', '..', 'backend', 'pb_hooks', 'lib', 'assist_identity.js')
 
 // 措辞表与生产者必须一起改：检测器或规则引擎新增一个 message_key 而前端没配措辞时，
 // 校对员会看到 FALLBACK 文案，而这两条测试会先一步失败。
@@ -37,9 +38,26 @@ function ruleEngineMessageKeys() {
   return keys
 }
 
+// #178 的跨行检出：finding 字面量形状是 { kind, severity, field, message_key, ... }
+function identityMessageKeys() {
+  const source = readFileSync(identityLib, 'utf8')
+  const pattern = /kind:\s*"[a-z_]+",\s*severity:\s*"(?:info|warn|strong)",\s*[^,]+,\s*\n?\s*message_key:\s*"([a-z_]+)"/g
+  const keys = new Set()
+  for (const match of source.matchAll(pattern)) keys.add(match[1])
+  assert.ok(keys.size >= 3, `expected the identity detector's message keys, got ${[...keys]}`)
+  return keys
+}
+
 test('every detector message key has a wording entry', () => {
   const registered = new Set(findingMessageKeys())
   for (const key of detectorMessageKeys()) {
+    assert.ok(registered.has(key), `findingMessages.js is missing wording for ${key}`)
+  }
+})
+
+test('every cross-row detector message key has a wording entry', () => {
+  const registered = new Set(findingMessageKeys())
+  for (const key of identityMessageKeys()) {
     assert.ok(registered.has(key), `findingMessages.js is missing wording for ${key}`)
   }
 })
@@ -68,7 +86,17 @@ test('each wording renders and stays free of cell text', () => {
     ['punctuation_width_mixed_in_column', { pairs: [{ full: 'U+FF08', half: 'U+0028' }], pair_count: 1 }],
     ['required_role_field_empty', { role: 'meaning' }],
     ['pdf_page_backtrack', { from_page: 40, to_page: 12, backtrack: 28 }],
-    ['page_entry_count_outlier', { entries_on_page: 31, median_entries: 6, ceiling: 18 }]
+    ['page_entry_count_outlier', { entries_on_page: 31, median_entries: 6, ceiling: 18 }],
+    // #178 跨行检出的三条。第一条是**故意的对抗样本**：生产方今天不带这两个键
+    // （assist_identity.js 只发 differs_on / partner_count / sources），但措辞不许把词头与
+    // 记音渲染进正文（findingMessages.js 里那句隐私承诺）这件事，得在有人把它们塞回来时立刻红，
+    // 而不是只靠注释自觉——所以这里偏要带上它们。
+    ['same_identity_different_content', {
+      partner_count: 2, differs_on: ['释义', '拼音'],
+      identity_headword: '喼测试', identity_reading: 'kʰɐt̚5'
+    }],
+    ['multiple_headwords_in_cell', { segments: 3, sample_lengths: [2, 5, 1] }],
+    ['reading_inside_meaning_row', { has_tone_digits: true, has_ipa_marks: true }]
   ]
   for (const [key, params] of cases) {
     const text = renderFindingMessage({ key, params })
@@ -77,6 +105,12 @@ test('each wording renders and stays free of cell text', () => {
     assert.ok(text.length >= 4, `${key} rendered ${JSON.stringify(text)}`)
     assert.ok(!text.startsWith(FALLBACK_PREFIX), `${key} fell through to the fallback: ${text}`)
     assert.ok(!/[{}[\]]/.test(text), `${key} leaked raw params: ${text}`)
+    // 别人条目的内容不许出现在这一条的措辞里（字段名与计数可以）。
+    for (const secret of [params.identity_headword, params.identity_reading]) {
+      if (typeof secret === 'string' && secret.length) {
+        assert.ok(!text.includes(secret), `${key} 把词头/记音渲染进了措辞正文：${text}`)
+      }
+    }
   }
 })
 

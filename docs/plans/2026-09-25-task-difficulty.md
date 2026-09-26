@@ -133,3 +133,27 @@ basis，要「人说过卡在哪」读 `blocked_reason`**；后者为空表示�
 - 不做志愿者能力模型/绩效（#162 亦列为非目标）；
 - 不做 #191 专家升级判定（#188），本层只提供 `blocked_reason` 这个正交字段；
 - **绝不**从他人提交结果推导 tier：本层输入里没有任何 attempt 内容（#175 红线 1）。
+
+## 9. 10k 行实测分布（2026-09-25，链顶口径）
+
+`measure_identity_scale.py` 在 #178 那份合成压力 fixture（10k 行、1/4 共享身份）上量到。下表是脚本里
+`findings/recompute` 那一跑（`measure_identity_scale.py:85-88`，输出字段 `rules_difficulty_tiers`）的分布，
+也就是**跨行检出之前**的状态：脚本按 rules → identity → identity 的顺序跑，而 identity 那一跑一条
+`refreshDifficulty` 都不调（见 `cross-row-conflicts.md` §6 的新鲜度那一节）。所以"unknown 那一档 408 行"
+是**测量顺序**的产物，不是系统的性质——按本支写下的 runbook 再跑一次项目重算之后，分组同词头同拼音的
+那些行会拿到 strong 的 `duplicate_identity`，unknown 与 B 两档的数字都会动。
+
+脚本今天只打这一份分布。要拿"检出后"的那一份，得在 identity 之后再跑一次 `findings/recompute`
+并打印第二列——那是下一次改脚本的活，这里不预测它会得出什么数字。
+
+| tier | 行数 | 说明 |
+| --- | --- | --- |
+| C | 9592 | 该 fixture 的 IPA 列大量使用 ASCII `a`/集外字符，每行普遍 ≥2 条 strong 疑点 |
+| unknown | 408 | 零疑点且没有可判信号 —— L0 没有列角色（#170），`pure_transcription` 这条 A 档判据不会命中 |
+| A / B | 0 / 0 | 同上：A 档两条判据分别要 `glyph_table` 阻塞原因与列角色，今天都不可达 |
+
+**这组数字不代表真实语料的分布**：fixture 是刻意制造分组与字符压力的合成行，
+真实项目里 C 的占比不会是这个量级。它证明的是两件事——10k 行一次算得完（10.7 s），
+以及 tier 在没有 #170 的现在**集中在 C 与 unknown 两档**（这一句说的是上面那份检出前的分布；
+跨行疑点落库并重算之后 unknown 会往下走，但 A 档两条判据今天仍然都不可达）。
+等 #170 落地，A/B 才可能出现，届时这张表要重测一遍再谈 #162 的默认排序。

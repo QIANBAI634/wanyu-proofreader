@@ -11,18 +11,32 @@
 // 顶层 require 在本机 JSVM 没有先例（.pb.js 的顶层绑定在回调里读不到）。
 
 const PRODUCER = "rule"
-// 全量重算的条目游标：每次读 PAGE_SCAN_CHUNK 条，翻完为止。
-// 上一版是 PAGE_SCAN_CAP = 5000 的一次性读取 + 按 project 全量下线，于是第 5001 条
-// 往后的当前批次被标 superseded 却没有新批次替换，那些条目从此永久读不到疑点
-// （#208 评审阻断 2）。现在只有两种结局：整批扫完，或在**任何写入之前**抛错拒算。
+// 条目游标：每次读 PAGE_SCAN_CHUNK 条，翻完为止——#177 与 #178 都要求 10k 行项目能全量跑通，
+// 所以这里**不能有硬上限**：一个 PAGE_SCAN_CAP 常数会把超出部分静默丢掉，报告仍然写得像
+// "算完了"，而按 project 全量下线会让第 5001 条往后的当前批次被标 superseded 却没有新批次
+// 替换（#208 评审阻断 2）。现在只有两种结局：整批扫完，或在**任何写入之前**抛错拒算；
+// 规模上限因此由耗时决定，代码里只留一条内存保险丝。
 const PAGE_SCAN_CHUNK = 1000
 // 通用分块读取的块大小。
 const READ_CHUNK = 1000
 // 内存保险丝，不是正确性上限：命中它就抛错，已落库的疑点一条都不动。
-// 10k 行项目的实测耗时见 docs/plans/2026-09-25-assist-rules.md §6。
+// 实测：10k 行项目端到端 6.1 s（backend/tests/measure_identity_scale.py）。
 const PROJECT_SCAN_REFUSAL = 50000
 // 下线旧批次时的读取块大小（见 retire）。
 const RETIRE_CHUNK = 1000
+
+// #177 与 #178 都用 producer = "rule"，但各自只该下线自己那批 kind。
+// 不按 kind 收口的话，跑一次 #177 的全量重算会把 #178 的跨行疑点全部标 superseded，
+// 反之亦然——两边各自看自己的表都"正常"，串起来才看得见。
+const RULE_KINDS = [
+  "char_out_of_repertoire", "confusable_substitution", "encoding_form_anomaly",
+  "missing_field", "reading_format_invalid", "punctuation_mix", "page_outlier"
+]
+const IDENTITY_KINDS = ["duplicate_identity", "cross_source_conflict", "merged_columns"]
+
+function kindClause(kinds) {
+  return "(" + kinds.map((kind) => `kind = "${kind}"`).join(" || ") + ")"
+}
 
 function nowStamp() {
   return new Date().toISOString()
@@ -110,7 +124,6 @@ function retire(dao, collection, clauses, shouldRetire, stamp, { chunk = RETIRE_
   }
 }
 
-// 把该范围内、同 producer 的当前批次全部下线。只写 superseded_at，其余字段一个都不碰。
 // 分块读完一个过滤条件下的全部行，读到空为止。
 //
 // 为什么全项目都用它而不是"一次读一个大 limit"：`limit N, offset 0` 的形状一旦
@@ -134,8 +147,8 @@ function readAllInChunks(dao, collection, filter, sort, { chunk = READ_CHUNK, on
 
 // 分批下线作用域内的当前批次。见 retire 的注释：这里防的是"读满一块就停"——
 // 剩下的行会以"当前批次"的身份永远留在库里，旧疑点再也下不了线。
-function supersede(dao, collection, clauses, at) {
-  return retire(dao, collection, clauses, () => true, at)
+function supersede(dao, collection, clauses, at, kinds) {
+  return retire(dao, collection, [...clauses, kindClause(kinds)], () => true, at)
 }
 
 // 插入之后的收尾：只下线**严格更早**的批次。
@@ -156,9 +169,9 @@ function stampKey(value) {
   return String(value ?? "").replace("T", " ").replace(/Z$/, "").slice(0, 23)
 }
 
-function settleBatch(dao, collection, clauses, at) {
+function settleBatch(dao, collection, clauses, at, kinds) {
   const mine = stampKey(at)
-  return retire(dao, collection, clauses, (record) =>
+  return retire(dao, collection, [...clauses, kindClause(kinds)], (record) =>
     stampKey(record.getString("produced_at")) < mine, at)
 }
 
@@ -184,9 +197,9 @@ function recomputePage(dao, pageId, rowOverride = null) {
   const row = rowOverride && Object.keys(rowOverride).length ? rowOverride : rowForRules(page)
   const findings = runEntryRules(contextFor(dao, page), row, pageId)
   const scope = pageScope(pageId, PROJECT_ONLY_MESSAGE_KEYS)
-  const superseded = supersede(dao, collection, scope, at)
+  const superseded = supersede(dao, collection, scope, at, RULE_KINDS)
   for (const item of findings) insertFinding(dao, collection, page, item, at, RULES_VERSION)
-  const settled = settleBatch(dao, collection, scope, at)
+  const settled = settleBatch(dao, collection, scope, at, RULE_KINDS)
   // 难度在收尾之后刷新：tier 由**当前批次**推导，收尾前读到的还是旧批次。
   const difficulty = refreshDifficulty(dao, page)
   return {
@@ -234,7 +247,7 @@ function recomputeProject(dao, projectId) {
   // 下线仍然按 project 收口：游标已经保证「要么整批扫完、要么写入前抛错」，
   // 被扫到的集合恒等于全项目，所以这里不需要再按条目列表拼 filter。
   const superseded = supersede(dao, collection,
-    [`project = "${projectId}"`, `producer = "${PRODUCER}"`], at)
+    [`project = "${projectId}"`, `producer = "${PRODUCER}"`], at, RULE_KINDS)
   const byId = new Map(pages.map((page) => [page.id, page]))
   const projectScope = [`project = "${projectId}"`, `producer = "${PRODUCER}"`]
   let inserted = 0
@@ -249,7 +262,7 @@ function recomputeProject(dao, projectId) {
     insertFinding(dao, collection, anchor, item, at, RULES_VERSION)
     inserted += 1
   }
-  const settled = settleBatch(dao, collection, projectScope, at)
+  const settled = settleBatch(dao, collection, projectScope, at, RULE_KINDS)
   if (unanchored) console.warn("assist_recompute unanchored findings", projectId, unanchored)
   // 同样放在收尾之后：全项目的 tier 要按最终留在库里的当前批次推导。
   const stats = projectShapeStats(pages)
@@ -271,6 +284,8 @@ function recomputeProject(dao, projectId) {
 // ---------- #180 难度标签 ----------
 // 疑点算完之后顺手刷新 tier：#180 只出数据与接口，不新造触发器，
 // 复用 #177 的两条路径（单条重算 / 项目全量），tier 才不会出现"疑点是新的、难度是旧的"。
+// 例外是 #178 的跨行路径：它一条 tier 都不刷，改由返回值里的 difficulty_stale 说明，
+// 跑完要再跑一次项目重算才是新的（理由与代价见 docs/plans/2026-09-25-cross-row-conflicts.md）。
 //
 // 读的是**全部当前批次疑点，不按 gate 过滤**：信号要的是"机器认为这行有多少问题"，
 // 与"校对员被打了几个标"是两件事；blocked_reason 依赖的 merged_columns 更是只有
@@ -352,6 +367,78 @@ function projectShapeStats(pages) {
   }
 }
 
+// ---------- #178 跨行检出 ----------
+// 只在批处理路径跑（跨行比较是 O(n) 起，绝不挂到提交路径上——#178 正文明确要求）。
+// 条目读取复用 #177 那个 loadAllPages：两条批处理路径的扫描语义因此不会各自漂移
+// （同名函数在这里定义第二遍会被提升覆盖，#177 那条的保险丝就会静默失效）。
+
+function recomputeIdentity(dao, projectId) {
+  const startedAt = new Date()
+  const { findIdentityConflicts, findRowShapeAnomalies, entryIdentityKey, IDENTITY_VERSION } =
+    require(`${__hooks}/lib/assist_identity.js`)
+  const collection = dao.findCollectionByNameOrId("review_findings")
+  const pages = loadAllPages(dao, projectId)
+
+  const entries = []
+  let backfilled = 0
+  for (const page of pages) {
+    const row = rowForRules(page)
+    const key = entryIdentityKey(row) ?? ""
+    if (page.getString("entry_identity_key") !== key) {
+      page.set("entry_identity_key", key)
+      dao.save(page) // 可重算的回填：键由列内容推导，不是原始证据
+      backfilled += 1
+    }
+    entries.push({ id: page.id, project: projectId, row, page, source: page.getString("project_file") })
+  }
+
+  // 人工结论必须读全：少读的那些组会被重新报成冲突，等于静默推翻人的判断——
+  // 而 #178 立这条收集合的理由就是"重算时保留人工结论，否则人就再也不信这个队列"。
+  // 5000 的上限不是假想：本 issue 自己的 10k 压力 fixture 就有 2500 个身份分组。
+  const dismissed = new Set(readAllInChunks(
+    dao, "finding_dismissals", `project = "${projectId}" && status = "not_conflict"`, "group_key"
+  ).map((row) => row.getString("group_key")))
+
+  const findings = [...findIdentityConflicts(entries, dismissed).findings]
+  for (const entry of entries) findings.push(...findRowShapeAnomalies(entry))
+
+  const at = nowStamp()
+  const superseded = supersede(dao, collection,
+    [`project = "${projectId}"`, `producer = "${PRODUCER}"`], at, IDENTITY_KINDS)
+  const byId = new Map(entries.map((entry) => [entry.id, entry.page]))
+  let inserted = 0
+  // 挂靠解析不出来就计数并跳过，绝不退化成"挂到第一条"；与 recomputeProject 同一形状，
+  // 这样两条批处理路径在"规则产了但写入端没接住"这件事上都会留下痕迹。
+  let unanchored = 0
+  for (const item of findings) {
+    const anchor = byId.get(item.evidence?.page) ?? null
+    if (!anchor) {
+      unanchored += 1
+      continue
+    }
+    insertFinding(dao, collection, anchor, item, at, IDENTITY_VERSION)
+    inserted += 1
+  }
+  const summary = {
+    project: projectId,
+    pages: pages.length,
+    findings: inserted,
+    unanchored,
+    superseded,
+    backfilled_keys: backfilled,
+    dismissed_groups: dismissed.size,
+    producer_version: IDENTITY_VERSION,
+    // 本路径**不刷 tier**（每页刷一次的 N+1 代价见 docs §耗时那一节），而 duplicate_identity
+    // 与 merged_columns 都是 strong、会进判定表。所以这一批之后每一页的 difficulty_tier 描述的是
+    // 跨行检出之前的疑点集合。字段让调用方看得见这件事，runbook 是"再跑一次 findings/recompute"。
+    difficulty_stale: inserted > 0 || superseded > 0,
+    duration_ms: new Date() - startedAt
+  }
+  if (unanchored) console.warn("identity_recompute unanchored findings", projectId, unanchored)
+  console.log("identity_recompute", JSON.stringify(summary))
+  return summary
+}
+
 // 提交/仲裁路径用的安全包装：疑点生产失败绝不能把已落库的提交变成错误。
 // 失败必须留下日志（不静默成「没有疑点」），管理端可用 findings/recompute 补算。
 function safeRecomputePage(dao, pageId, row, label) {
@@ -376,7 +463,12 @@ module.exports = {
   PAGE_SCAN_CHUNK,
   PROJECT_SCAN_REFUSAL,
   loadAllPages,
+  RULE_KINDS,
+  IDENTITY_KINDS,
   rowForRules,
   recomputePage,
-  recomputeProject
+  recomputeProject,
+  recomputeIdentity,
+  refreshDifficulty,
+  projectShapeStats
 }
