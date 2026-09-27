@@ -10,7 +10,7 @@ import * as pbErrors from '../src/utils/pbErrors.js'
 const source = readFileSync(new URL('../src/views/admin/ProjectDetailView.vue', import.meta.url), 'utf8')
   .replace(/\r\n/g, '\n')
 const imports = source.match(/import \{([^}]+)\} from '@\/utils\/pbErrors'/)
-const mounted = source.match(/onMounted\((async \(\) => \{[\s\S]*?)\r?\n\}\)\r?\n/)
+const mounted = source.match(/onMounted\((async \(\) => \{[\s\S]*?)\n\}\)\n/)
 assert.ok(imports, 'component must declare its error helper imports')
 assert.ok(mounted, 'component must register a mounted callback')
 const helpers = Object.fromEntries(imports[1].split(',').map((name) => {
