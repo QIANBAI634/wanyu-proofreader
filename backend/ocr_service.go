@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,6 +18,17 @@ import (
 // 主站与既有导入链路完全不受影响（对应 #121 硬性要求第 4 条）。
 // 后续接入真实引擎（数字原生文本提取 / 图像 OCR）时，再定义具体引擎配置。
 const ocrEngineEnv = "OCR_ENGINE_ENABLED"
+
+// newOCRJobHash 为 OCR 作业生成一个满足 file_hash 字段契约的唯一判别值：
+// 32 随机字节 → 64 位小写十六进制（file_hash 的 min/max/pattern 是 ^[a-f0-9]{64}$）。
+// 语义上只是「本次发起的判别码」，不代表任何文件；OCR 作业不做文件级去重。
+func newOCRJobHash() string {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err == nil {
+		return hex.EncodeToString(random)
+	}
+	return strings.Repeat("0", 64)
+}
 
 func (s *importService) registerOCR() {
 	s.app.OnServe().BindFunc(func(e *core.ServeEvent) error {
@@ -62,9 +75,9 @@ func (s *importService) startOCR(c *core.RequestEvent) error {
 		"project_file":      projectFileID,
 		"pdf_page_limit":    pdfPageLimit,
 		// OCR 作业无源文件，但 file_hash 参与 idx_import_jobs_dedup 唯一索引。
-		// 用一个每次唯一的随机值作判别，避免同项目第二次发起撞 UNIQUE 约束；
-		// 也明确"OCR 作业不做文件级去重"（每次发起都是独立作业）。
-		"file_hash": "ocr-" + newRequestID(),
+		// 用一个每次唯一的 64 位 hex 作判别（满足 file_hash 字段契约），
+		// 避免同项目第二次发起撞 UNIQUE 约束；OCR 作业不做文件级去重。
+		"file_hash": newOCRJobHash(),
 	})
 	if err := form.Submit(); err != nil {
 		logUploadRejected(requestID, "ocr", projectID, "record_create", "OCR job creation failed", err)

@@ -120,6 +120,23 @@ func TestProcessOCRNeverStuck(t *testing.T) {
 	}
 }
 
+// newOCRJobHash 生成的判别值必须满足 file_hash 字段契约：
+// 64 位小写十六进制（^[a-f0-9]{64}$）。之前用 "ocr-"+24位hex 违反该契约，
+// 导致 form.Submit() 必然失败、发起入口整体不可用。
+func TestNewOCRJobHashMatchesFileHashContract(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		h := newOCRJobHash()
+		if len(h) != 64 {
+			t.Fatalf("newOCRJobHash length=%d, want 64", len(h))
+		}
+		for _, ch := range h {
+			if !((ch >= 'a' && ch <= 'f') || (ch >= '0' && ch <= '9')) {
+				t.Fatalf("newOCRJobHash contains non-hex char %q", ch)
+			}
+		}
+	}
+}
+
 // 验收点 3：只有项目管理员可发起识别，三类身份拒绝路径均有 HTTP 断言。
 // 用真实 schema + 真实路由，避免"测试手工搭 schema 对真实风险全盲"。
 func TestStartOCRAuthorization(t *testing.T) {
