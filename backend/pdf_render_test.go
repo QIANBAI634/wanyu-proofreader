@@ -53,7 +53,7 @@ func TestTaskPDFRenderingFixture(t *testing.T) {
 		if end > 3 {
 			end = 3
 		}
-		data, err := buildTaskPDF(bytes.NewReader(renderingTestPDF()), start, end, "Wanyu | synthetic | task | UTC")
+		data, err := buildTaskPDF(bytes.NewReader(renderingTestPDF()), start, end, "Wanyu | synthetic | task | UTC", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestTaskPDFBrowserRegression(t *testing.T) {
 		if end > count {
 			end = count
 		}
-		output, err := mergeCachedPDFPages(pagesDir, start, end, stamp)
+		output, err := mergeCachedPDFPages(pagesDir, start, end, stamp, nil)
 		if err != nil {
 			t.Fatalf("page %d: %v", start, err)
 		}

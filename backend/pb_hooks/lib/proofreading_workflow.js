@@ -79,12 +79,44 @@ function requiredProofreads(dao, projectId) {
   return Math.max(2, project.getInt("required_proofreads") || 2)
 }
 
+// Precomposed and decomposed spellings of the same reading are the same reading.
+// This corpus is full of nasalised vowels with combining tildes, and U+00E3 (ã)
+// versus a + U+0303 render identically while differing in bytes, so raw string
+// comparison reported two proofreaders as disagreeing when no one could see a
+// difference. That false divergence went straight into arbitration and counted
+// against the proofreaders' accuracy, because it spends the scarcest resource
+// in the project on a difference that does not exist.
+//
+// NFC only, never NFKC. NFKC goes further and folds compatibility forms —
+// fullwidth Ａ to A, superscript ² to 2 and ʰ to h, the ﬁ ligature to fi — which
+// would erase distinctions this project deliberately keeps. That is a worse
+// error than the one being fixed here, so the direction is pinned by a test.
+//
+// Reading those tests: ɑ (U+0251) and Ǿ (U+01FE) survive NFKC unchanged, so a
+// pair like ɑ/a cannot tell the two forms apart and stays green under an NFKC
+// implementation. Only a pair NFKC really folds can pin this direction.
+//
+// This is a comparison key, never a write-back: an attempt's row_json keeps the
+// exact codepoints its proofreader typed.
+function normalizeNFC(value) {
+  // goja implements String.prototype.normalize with a real NFC branch, so this
+  // needs no Go-side comparison rewrite and no new dependency. A probe test
+  // pins it: swapping the JSVM for one without it would silently turn this into
+  // the identity function and bring the false divergences straight back.
+  return String(value ?? "").normalize("NFC")
+}
+
 function canonicalRow(raw) {
   let parsed = null
-  try { parsed = JSON.parse(String(raw || "")) } catch { return String(raw || "") }
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return String(raw || "")
+  try { parsed = JSON.parse(String(raw || "")) } catch { return normalizeNFC(raw) }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return normalizeNFC(raw)
+  // Keys are normalised too, but looked up under their original spelling: two
+  // spellings of one column name are one column.
+  const entries = Object.keys(parsed)
+    .map((key) => [normalizeNFC(key), String(parsed[key] ?? "").trim()])
+  entries.sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
   const result = {}
-  Object.keys(parsed).sort().forEach((key) => { result[key] = String(parsed[key] ?? "").trim() })
+  for (const [key, value] of entries) result[key] = normalizeNFC(value)
   return JSON.stringify(result)
 }
 

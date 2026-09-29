@@ -218,8 +218,26 @@ jobs:
           PDF_UPLOAD_BROWSER_SCRIPT: ${{ github.workspace }}/backend/tests/pdf_upload_browser.cjs
           PDF_BROWSER_FIXTURE: ${{ runner.temp }}/upload-browser-fixture.json
         run: python3 backend/tests/run_integration.py pdf_chunks_integration.mjs
-      - name: Attach PDF upload state screenshots
-        if: always()
+      - name: Verify all PDF upload state screenshots
+        if: success()
+        run: |
+          # The four states mirror the page.screenshot() calls in
+          # backend/tests/pdf_upload_browser.cjs; add new states in both places.
+          for state in invalid failure progress success; do
+            test -s "output/playwright/pdf-upload/upload-${state}.png" || {
+              echo "Missing or empty PDF upload screenshot: upload-${state}.png" >&2
+              exit 1
+            }
+          done
+      - name: Attach required PDF upload state screenshots
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf-upload-states
+          path: output/playwright/pdf-upload/*.png
+          if-no-files-found: error
+      - name: Attach PDF upload state screenshots after failure
+        if: ${{ always() && !success() }}
         uses: actions/upload-artifact@v7
         with:
           name: pdf-upload-states

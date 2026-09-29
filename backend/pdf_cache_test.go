@@ -4,12 +4,156 @@ import (
 	"bytes"
 	"errors"
 	pdfapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// writeSourcePDF places bytes where openRecordFile looks for them.
+func writeSourcePDF(t *testing.T, app *pocketbase.PocketBase, collectionID, recordID string, data []byte) {
+	t.Helper()
+	dir := filepath.Join(app.DataDir(), "storage", collectionID, recordID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "source.pdf"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sourcePDFRecord(t *testing.T, app *pocketbase.PocketBase) (*core.Record, string) {
+	t.Helper()
+	collection, err := app.FindCollectionByNameOrId("project_files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := core.NewRecord(collection)
+	record.Id = "previewsource001"
+	record.Set("file", "source.pdf")
+	record.Set("file_hash", "version-one")
+	record.Set("page_count", 3)
+	return record, collection.Id
+}
+
+// A request that finds no pre-split pages must trim its own window and nothing
+// more. This split used to happen here, on the first screen of every cold or
+// expired book, behind the process-wide mutex that serialises every preview.
+func TestCachedTaskPDFDegradesWithoutSplittingTheBook(t *testing.T) {
+	app := newSchemaTestApp(t)
+	s := newImportService(app)
+	record, collectionID := sourcePDFRecord(t, app)
+	writeSourcePDF(t, app, collectionID, record.Id, renderingTestPDF())
+
+	descriptor := describePDF(record, 1, 2, "alice", time.Now())
+	output, err := s.cachedTaskPDF(record, descriptor, "proofreader0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := pdfapi.PageCount(bytes.NewReader(output), nil)
+	if err != nil || count != 2 {
+		t.Fatalf("degraded preview: count=%d err=%v", count, err)
+	}
+	// The page cache stays absent: building it is the import worker's job.
+	if _, ok := lookupPDFPages(s.pdfCacheDir(), pdfSourceKey(record), time.Now()); ok {
+		t.Fatal("request path reported a page cache it never built")
+	}
+	entries, _ := os.ReadDir(s.pdfCacheDir())
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "pages-") {
+			t.Fatalf("request path split the whole book: %s", entry.Name())
+		}
+	}
+}
+
+// A cache hit must not age out from under a book that is in daily use. Without
+// the touch, retention is counted from the split, so a busy book loses its
+// cache on a timer and pays the degraded path from then on.
+func TestCachedTaskPDFKeepsAHitWarm(t *testing.T) {
+	app := newSchemaTestApp(t)
+	s := newImportService(app)
+	record, collectionID := sourcePDFRecord(t, app)
+	writeSourcePDF(t, app, collectionID, record.Id, renderingTestPDF())
+
+	root := s.pdfCacheDir()
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "pages-"+pdfSourceKey(record))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := splitPDFPages(bytes.NewReader(renderingTestPDF()), dir, pdfBookBudget); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ready"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Just inside the window, so the hit only succeeds if it is also refreshed.
+	// Both timestamps have to age: lookupPDFPages gates on ready, cleanupPDFCache
+	// on the directory. Aging only the directory leaves this test passing even
+	// with no touch at all, which is how it first shipped.
+	aged := time.Now().Add(-pdfPagesTTL + time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, "ready"), aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dir, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor := describePDF(record, 1, 2, "alice", time.Now())
+	if _, err := s.cachedTaskPDF(record, descriptor, "proofreader0001"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the window from where the request left it, not from "now".
+	if _, ok := lookupPDFPages(root, pdfSourceKey(record), aged.Add(pdfPagesTTL+time.Second)); !ok {
+		t.Fatal("a cache hit did not extend the page cache's retention window")
+	}
+}
+
+// A page directory that advertises itself ready but cannot be merged must be
+// reported as such. It is the one verdict that would otherwise masquerade as a
+// clean cache hit, and a request logged as a hit while extract_ms is non-zero
+// would send whoever reads it after the wrong thing.
+func TestCachedTaskPDFReportsAnUnreadablePageDirectory(t *testing.T) {
+	app := newSchemaTestApp(t)
+	s := newImportService(app)
+	record, collectionID := sourcePDFRecord(t, app)
+	writeSourcePDF(t, app, collectionID, record.Id, renderingTestPDF())
+
+	root := s.pdfCacheDir()
+	dir := filepath.Join(root, "pages-"+pdfSourceKey(record))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ready"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// 1.pdf is deliberately absent: the directory looks usable but merges fail.
+
+	var logged bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previous)
+
+	descriptor := describePDF(record, 1, 2, "alice", time.Now())
+	output, err := s.cachedTaskPDF(record, descriptor, "proofreader0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := pdfapi.PageCount(bytes.NewReader(output), nil)
+	if err != nil || count != 2 {
+		t.Fatalf("degraded preview: count=%d err=%v", count, err)
+	}
+	if !strings.Contains(logged.String(), `"cache":"pages-unreadable-degraded"`) {
+		t.Fatalf("an unreadable page directory was not reported as such: %s", logged.String())
+	}
+}
 
 func TestSplitPDFPagesKeepsRotationAndOnlyOnePage(t *testing.T) {
 	dir := t.TempDir()

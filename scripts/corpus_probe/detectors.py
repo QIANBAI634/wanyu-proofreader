@@ -260,11 +260,19 @@ def analyze_row(row, reading_fields=("拼音", "莆田IPA", "仙游IPA"),
         if not value:
             continue
         hits = []
+        # Structure complaints run on every column, not just the reading ones.
+        # Gating them on reading_fields measured a total recall loss on the real
+        # 15,022-row 正本: all 793 @hex placeholders sit in 词条 / 释义, and the
+        # reading columns carry none, so the gate saw zero of them. The same gate
+        # hid non-repertoire characters outside the reading columns.
+        #
+        # reading_fields stays hardcoded for now; #170 replaces it with column
+        # roles, and this note goes with it.
+        hits += detect_missing_glyph_placeholders(value, field)
+        hits += detect_non_repertoire_chars(value, field, allowed_repertoire)
         if field in reading_fields:
             hits += detect_illegal_tone_runs(value, field)
-            hits += detect_missing_glyph_placeholders(value, field)
             hits += detect_column_collapse(value, field)
-            hits += detect_non_repertoire_chars(value, field, allowed_repertoire)
             hits += detect_combining_marks(value, field)
         hits += detect_cjk_extension(value, field)
         if field in meaning_fields:
