@@ -1,12 +1,11 @@
 """难字 / 弃权字符集定义（#120 打分脚本共享）。
 
-范围与仓库基线对齐，不再手抄：
-- 罕见汉字：frontend/src/lib/rareCharacters.js 的判定区间
-- 音标字符：scripts/corpus_probe/detectors.py 的 PHONETIC_RUN（运行时 import，保证一致）
+范围与仓库基线对齐，不再手抄字集清单：
+- 罕见汉字：frontend/src/lib/rareCharacters.js 的判定区间（本文件 RARE_CJK_RANGES 与其对齐）
+- 音标字符：scripts/corpus_probe/detectors.py（真正 import 模块，用其 PHONETIC_RUN 与 IPA_BLOCK）
 - 带圈序号 / 上标调号：本文件内固定集合
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -23,28 +22,31 @@ RARE_CJK_RANGES = (
 CIRCLED = frozenset("①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳")
 SUPERSCRIPT = frozenset("¹²³⁴⁵⁶⁷⁸⁹⁰")
 
-# 组合用鼻化/变音附加符（U+0300–U+036F 区段，超出 PHONETIC_RUN 覆盖）
+# 组合用鼻化/变音附加符（U+0300–U+036F）
 _COMBINING_DIACRITICS = (0x0300, 0x036F)
+# 修饰字母区段（U+02B0–U+02FF），含 ʰ ʷ ʲ ˠ ˤ ʳ 等上标音标
+_MODIFIER_LETTERS = (0x02B0, 0x02FF)
 
 
-def _load_phonetic_charset():
-    """从 scripts/corpus_probe/detectors.py 的 PHONETIC_RUN 提取音标字符集。
+def _load_detectors():
+    """真正 import scripts/corpus_probe/detectors.py，返回其模块（或 None）。
 
-    保证与仓库唯一权威字集一致，不在这里手抄第三份清单。
+    不解析其正则源码，而是直接用它的 PHONETIC_RUN 与 IPA_BLOCK。
     """
     repo_root = Path(__file__).resolve().parent.parent
-    detectors = repo_root / "scripts" / "corpus_probe" / "detectors.py"
-    if not detectors.is_file():
-        # 无法定位 detectors 时退回最小 IPA 块，避免脚本完全不可用
-        return frozenset(), (0x0250, 0x02AF)
-    src = detectors.read_text(encoding="utf-8")
-    m = re.search(r"PHONETIC_RUN = re\.compile\(\s*r\"\[([^\]]*)\]", src)
-    if not m:
-        return frozenset(), (0x0250, 0x02AF)
-    return frozenset(m.group(1)), (0x0250, 0x02AF)
+    scripts_dir = repo_root / "scripts"
+    if not (scripts_dir / "corpus_probe" / "detectors.py").is_file():
+        return None
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    try:
+        from corpus_probe import detectors
+        return detectors
+    except ImportError:
+        return None
 
 
-_PHONETIC_CHARS, _IPA_BLOCK = _load_phonetic_charset()
+_detectors = _load_detectors()
 
 
 def in_ranges(code, ranges):
@@ -57,10 +59,19 @@ def is_rare_cjk(ch):
 
 
 def is_ipa(ch):
-    """是否 IPA 音标 / 音标用拉丁变音字母 / 鼻化附加符。"""
-    if ch in _PHONETIC_CHARS:
-        return True
-    return in_ranges(ord(ch), (_IPA_BLOCK, _COMBINING_DIACRITICS))
+    """是否 IPA 音标 / 音标用拉丁变音字母 / 修饰字母 / 鼻化附加符。
+
+    判据优先级：
+    1. detectors.PHONETIC_RUN.fullmatch：仓库唯一的音标字符类（含拉丁变音字母 ŋ œ β θ 等）
+    2. detectors.IPA_BLOCK：IPA 扩展块（U+0250–U+02AF）
+    3. 修饰字母区段 U+02B0–U+02FF 与组合附加符 U+0300–U+036F
+    """
+    if _detectors is not None:
+        if _detectors.PHONETIC_RUN.fullmatch(ch):
+            return True
+        if ch and ord(ch) in _detectors.IPA_BLOCK:
+            return True
+    return in_ranges(ord(ch), (_MODIFIER_LETTERS, _COMBINING_DIACRITICS))
 
 
 def is_hard_char(ch):
@@ -75,7 +86,6 @@ def is_hard_char(ch):
 # - 空格 / 空串：引擎未输出
 # - PUA 私用区（U+E000–U+F8FF）：用私用码位占位（见 #123 的 PUA 方案）
 # - IDS 运算符（U+2FF0–U+2FFF）：表意文字描述序列（见 #123 的 IDS 方案）
-# - 兼容表意文字若作为「明确弃权」出现，也应算弃权而非替换
 ABSTAIN_RANGES = (
     (0xE000, 0xF8FF),     # Private Use Area
     (0x2FF0, 0x2FFF),     # Ideographic Description Characters

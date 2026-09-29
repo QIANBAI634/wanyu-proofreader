@@ -97,6 +97,13 @@ class TestKeyAlignment(unittest.TestCase):
         r = score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
         self.assertEqual(r["列归属准确率"], 1.0)
 
+    def test_empty_key_raises(self):
+        # 阻断2：键列存在但值为空时，必须报错，不能静默退化成按行序对齐
+        gold = [{"页码": "", "词头": "a", "音读": "b", "释义": "c"}]
+        test = [{"页码": "", "词头": "a", "音读": "b", "释义": "c"}]
+        with self.assertRaises(ValueError):
+            score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
+
 
 class TestCerbounded(unittest.TestCase):
     def test_cer_is_bounded(self):
@@ -140,11 +147,19 @@ class TestDuplicateKey(unittest.TestCase):
 
 class TestIpaCharset(unittest.TestCase):
     def test_eng_is_hard(self):
-        # 阻断3：ŋ（软颚鼻音）必须是难字，ŋ→n 必须检出静默替换
+        # 阻断3：ŋ（软颚鼻音）必须被判为难字（之前漏判导致难字总数=0）
+        # 注：ŋ→n 是两个音标之间的替换，不属"难字→常见字"的静默替换，
+        #     这里只断言难字被正确识别（审查者的核心诉求）。
         gold = [{"词头": "ɛŋʔ", "音读": "a", "释义": "x"}]
         test = [{"词头": "ɛnʔ", "音读": "a", "释义": "x"}]
         r = score(gold, test, FIELDS)
         self.assertGreater(r["难字总数"], 0)
+
+    def test_hard_char_to_common_char_is_silent_replace(self):
+        # 难字被认成真正的常见字（非音标）时，才应记静默替换
+        gold = [{"词头": "ɛŋ", "音读": "a", "释义": "x"}]
+        test = [{"词头": "本本", "音读": "a", "释义": "x"}]
+        r = score(gold, test, FIELDS)
         self.assertGreater(r["静默替换率"], 0.0)
 
 

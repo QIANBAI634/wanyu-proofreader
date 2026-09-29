@@ -109,7 +109,18 @@ def score(gold_rows, test_rows, fields, key=None):
 
     fields：按标准答案的字段表（待测缺列按空值计错，不从分母剔除）。
     key：若给定，按键列对齐；否则按行序对齐。
+
+    若 key 列存在空值，抛 ValueError（避免静默退化成按行序对齐）。
     """
+    if key:
+        empty_gold = sum(1 for r in gold_rows if not str(r.get(key, "")).strip())
+        empty_test = sum(1 for r in test_rows if not str(r.get(key, "")).strip())
+        if empty_gold or empty_test:
+            raise ValueError(
+                f"--key 列 {key} 存在空值（标准答案 {empty_gold} 行、待测 {empty_test} 行），"
+                f"无法按键值对齐。请换一个无空值的列，或去掉 --key 按行序对齐。"
+            )
+
     n_gold = len(gold_rows)
     n_test = len(test_rows)
 
@@ -266,7 +277,11 @@ def main():
         print(f"错误：--key 指定的列 {key} 不在标准答案的字段中。", file=sys.stderr)
         sys.exit(1)
 
-    result = score(gold_rows, test_rows, fields, key=key)
+    try:
+        result = score(gold_rows, test_rows, fields, key=key)
+    except ValueError as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        sys.exit(1)
 
     print("=" * 50)
     print("万语校坊 OCR 打分结果")
