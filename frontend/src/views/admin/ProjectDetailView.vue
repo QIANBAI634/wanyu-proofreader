@@ -206,9 +206,6 @@
                 <span class="text-sm text-muted">作业 {{ ocrJob.id }}</span>
               </div>
               <div v-if="ocrJob.error_message" class="text-sm text-muted mt-2">{{ ocrJob.error_message }}</div>
-              <div v-if="ocrJob.status === 'completed'" class="alert alert-success mt-2">
-                识别完成，结果已生成，可进入校对或导出流程查看。
-              </div>
             </div>
             <div v-if="ocrError" class="alert alert-error mt-2" style="white-space:pre-line">{{ ocrError }}</div>
           </div>

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -62,6 +61,10 @@ func (s *importService) startOCR(c *core.RequestEvent) error {
 		"failed_count":      0,
 		"project_file":      projectFileID,
 		"pdf_page_limit":    pdfPageLimit,
+		// OCR 作业无源文件，但 file_hash 参与 idx_import_jobs_dedup 唯一索引。
+		// 用一个每次唯一的随机值作判别，避免同项目第二次发起撞 UNIQUE 约束；
+		// 也明确"OCR 作业不做文件级去重"（每次发起都是独立作业）。
+		"file_hash": "ocr-" + newRequestID(),
 	})
 	if err := form.Submit(); err != nil {
 		logUploadRejected(requestID, "ocr", projectID, "record_create", "OCR job creation failed", err)
@@ -81,7 +84,12 @@ func (s *importService) startOCR(c *core.RequestEvent) error {
 //
 // 当前实现只交付 #121 要求的"链路成立 + 状态可信"，不承诺识别质量（#121 非目标）：
 //   - 未配置引擎（OCR_ENGINE_ENABLED 非真值）→ 明确 failed，提示"识别能力未启用"；
-//   - 已配置引擎 → 进入 processing 后完成，产出可预览的结构化占位结果，交给 #124 展示。
+//   - 已配置引擎但真实引擎尚未接入 → 明确 failed（OCR_ENGINE_PENDING），
+//     绝不用 completed 宣告"识别完成"，避免对外宣称具备真实识别能力。
+//
+// 并发限制（#121 已知坑）：OCR 与 CSV/PDF 共用 runWorker 的单串行 goroutine。
+// 接入真实引擎前必须改为独立 worker / 并发上限，否则一次识别会阻塞全部导入——
+// 由 #122 承接。当前占位实现无耗时工作，此限制暂无实际影响。
 //
 // 数字原生文本提取与图像 OCR 由后续 issue（#123/#125）或真实引擎接入时实现。
 func (s *importService) processOCR(work importWork) {
@@ -115,24 +123,9 @@ func (s *importService) processOCR(work importWork) {
 		return
 	}
 
-	// 引擎已启用：产出结构化占位结果，状态 completed。
-	// 真实识别逻辑在此接入（见 #121/#123/#125 及 #120 选型建议书）。
-	result := map[string]any{
-		"engine":          "pending",
-		"project_file_id": job.GetString("project_file"),
-		"rows":            []map[string]string{},
-		"note":            "识别链路已打通；真实识别结果由后续引擎接入后填充。",
-	}
-	resultJSON, _ := json.Marshal(result)
-	job.Set("status", "completed")
-	job.Set("inspection_json", string(resultJSON))
-	job.Set("finished_at", types.NowDateTime())
-	if err := s.app.Save(job); err != nil {
-		s.markFatal(work, "OCR_RESULT_PERSIST_FAILED", "识别结果写入失败。", err)
-		return
-	}
-	logUpload("info", "ocr_job_completed", map[string]any{
-		"request_id": work.requestID,
-		"job_id":     work.id,
-	})
+	// 引擎开关虽为真，但真实识别引擎尚未接入。这里绝不能用 completed 宣告
+	// 「识别完成、结果已生成」——那是对外宣称具备真实识别能力，违反 #121
+	// 验收标准最后一条。占位阶段明确落为失败态，等 #122/#123/#125 接入真引擎
+	// 后再产出可预览的结构化结果。
+	s.markFatal(work, "OCR_ENGINE_PENDING", "识别引擎尚未接入，当前无法产出识别结果。", fmt.Errorf("OCR engine integration is pending (#122/#123/#125)"))
 }

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 )
 
@@ -77,8 +80,9 @@ func TestProcessOCRDisabledEngineFails(t *testing.T) {
 	}
 }
 
-// 验收点：配置引擎后，作业能进入 completed 并产出可读的结构化结果。
-func TestProcessOCREnabledEngineCompletes(t *testing.T) {
+// 验收点：配置了引擎开关、但真实引擎尚未接入时，作业也必须明确失败，
+// 绝不能用 completed 宣告"识别完成"（不得对外宣称具备真实识别能力）。
+func TestProcessOCREnabledEngineStillPending(t *testing.T) {
 	os.Setenv(ocrEngineEnv, "true")
 	t.Cleanup(func() { os.Unsetenv(ocrEngineEnv) })
 	svc, jobs := newOCRTestService(t)
@@ -90,11 +94,11 @@ func TestProcessOCREnabledEngineCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.GetString("status") != "completed" {
-		t.Fatalf("expected completed status, got %q", loaded.GetString("status"))
+	if loaded.GetString("status") != "failed" {
+		t.Fatalf("expected failed status (engine pending), got %q", loaded.GetString("status"))
 	}
-	if loaded.GetString("inspection_json") == "" {
-		t.Fatal("expected structured result in inspection_json")
+	if loaded.GetString("error_code") != "OCR_ENGINE_PENDING" {
+		t.Fatalf("expected OCR_ENGINE_PENDING, got %q", loaded.GetString("error_code"))
 	}
 }
 
@@ -113,5 +117,79 @@ func TestProcessOCRNeverStuck(t *testing.T) {
 	status := loaded.GetString("status")
 	if status != "completed" && status != "failed" {
 		t.Fatalf("expected terminal status, got %q", status)
+	}
+}
+
+// 验收点 3：只有项目管理员可发起识别，三类身份拒绝路径均有 HTTP 断言。
+// 用真实 schema + 真实路由，避免"测试手工搭 schema 对真实风险全盲"。
+func TestStartOCRAuthorization(t *testing.T) {
+	app := newSchemaTestApp(t)
+	users, _ := app.FindCollectionByNameOrId("users")
+	projects, _ := app.FindCollectionByNameOrId("projects")
+
+	mkUser := func(username, role string) (*core.Record, string) {
+		u := core.NewRecord(users)
+		u.Set("username", username)
+		u.Set("role", role)
+		u.SetPassword("OcrTest12345!")
+		if err := app.Save(u); err != nil {
+			t.Fatal(err)
+		}
+		token, _ := u.NewAuthToken()
+		return u, token
+	}
+
+	admin, adminToken := mkUser("ocr-admin", "platform_admin")
+	_, memberToken := mkUser("ocr-member", "user")
+	_, outsiderToken := mkUser("ocr-outsider", "user")
+
+	project := core.NewRecord(projects)
+	project.Set("name", "OCR auth fixture")
+	project.Set("access_mode", "members_only")
+	project.Set("required_proofreads", 2)
+	project.Set("admin", admin.Id)
+	if err := app.Save(project); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newImportService(app)
+	s.registerOCR()
+	router, err := apis.NewRouter(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.OnServe().Trigger(&core.ServeEvent{App: app, Router: router}); err != nil {
+		t.Fatal(err)
+	}
+	defer app.OnTerminate().Trigger(&core.TerminateEvent{App: app})
+	mux, err := router.BuildMux()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	url := "/api/fangji/projects/" + project.Id + "/imports/ocr"
+	post := func(token string) int {
+		r := httptest.NewRequest(http.MethodPost, url, nil)
+		if token != "" {
+			r.Header.Set("Authorization", token)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	// 三类拒绝路径
+	if code := post(""); code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，got %d", code)
+	}
+	if code := post(outsiderToken); code != http.StatusForbidden {
+		t.Fatalf("非项目成员应 403，got %d", code)
+	}
+	if code := post(memberToken); code != http.StatusForbidden {
+		t.Fatalf("成员但非管理员应 403，got %d", code)
+	}
+	// 管理员应能通过鉴权（后续因无主 PDF 返回 400，而非 401/403）
+	if code := post(adminToken); code != http.StatusBadRequest {
+		t.Fatalf("管理员应通过鉴权（无主 PDF 时 400），got %d", code)
 	}
 }

@@ -81,6 +81,24 @@ SPECS = {
         ],
         'collection_indexes': ('pages', 'idx_pages_project_identity'),
     },
+    # OCR 的三条迁移只改字段元数据（mode 加值、source_file/file_hash/file_size 放开必填），
+    # 不建索引。用 fields 断言验证 _collections 里的字段元数据，而非空填 indexes。
+    '1789060000_ocr_import_mode.js': {
+        'fields': ('import_jobs', {
+            'mode': {'values_contains': 'ocr'},
+        }),
+    },
+    '1789061000_ocr_source_file_optional.js': {
+        'fields': ('import_jobs', {
+            'source_file': {'required': False},
+        }),
+    },
+    '1789062000_ocr_file_meta_optional.js': {
+        'fields': ('import_jobs', {
+            'file_hash': {'required': False},
+            'file_size': {'required': False},
+        }),
+    },
 }
 FIRST = '1788940000_initial_schema.js'
 
@@ -152,6 +170,9 @@ def assert_applied(data, migration, problems):
             plan = str(db.execute(f'EXPLAIN QUERY PLAN {query}', parameters).fetchall())
         if name not in plan:
             problems.append(f'{migration}: {table} query plan does not use {name}: {plan}')
+    field_spec = spec.get('fields')
+    if field_spec:
+        _assert_fields(data, migration, field_spec, problems, expect=True)
 
 
 def assert_absent(data, migration, problems, context):
@@ -159,6 +180,46 @@ def assert_absent(data, migration, problems, context):
     for name in SPECS.get(migration, {}).get('indexes', []):
         if name in present:
             problems.append(f'{migration}: index {name} survived {context}')
+    field_spec = SPECS.get(migration, {}).get('fields')
+    if field_spec:
+        _assert_fields(data, migration, field_spec, problems, expect=False)
+
+
+def _assert_fields(data, migration, field_spec, problems, expect):
+    """验证 _collections 里字段元数据（required / values），供只改字段的迁移使用。
+
+    field_spec 形如 (collection, {field_name: {'required': bool, 'values_contains': str}})。
+    expect=True 表示应用迁移后应满足这些条件；expect=False 表示回滚后应不满足。
+    """
+    collection, fields = field_spec
+    with sqlite3.connect(data / 'data.db') as db:
+        row = db.execute('SELECT fields FROM _collections WHERE name=?', (collection,)).fetchone()
+    if row is None:
+        problems.append(f'{migration}: collection {collection} missing')
+        return
+    declared = json.loads(row[0])
+    for field_name, conditions in fields.items():
+        target = next((f for f in declared if f.get('name') == field_name), None)
+        if target is None:
+            problems.append(f'{migration}: field {collection}.{field_name} missing')
+            continue
+        if 'required' in conditions:
+            actual = target.get('required')
+            want = conditions['required']
+            ok = (actual == want) if expect else (actual != want)
+            if not ok:
+                state = 'applied' if expect else 'rolled back'
+                problems.append(
+                    f'{migration}: {collection}.{field_name}.required should be {want} when {state}, got {actual}')
+        if 'values_contains' in conditions:
+            actual_values = target.get('values', [])
+            want = conditions['values_contains']
+            contains = want in actual_values
+            ok = contains if expect else (not contains)
+            if not ok:
+                state = 'applied' if expect else 'rolled back'
+                problems.append(
+                    f'{migration}: {collection}.{field_name}.values should {"contain" if expect else "exclude"} {want!r} when {state}')
 
 
 def assert_state(data, expected, through, problems, context):
