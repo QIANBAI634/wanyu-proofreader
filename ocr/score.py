@@ -113,8 +113,16 @@ def score(gold_rows, test_rows, fields, key=None):
     若 key 列存在空值，抛 ValueError（避免静默退化成按行序对齐）。
     """
     if key:
-        empty_gold = sum(1 for r in gold_rows if not str(r.get(key, "")).strip())
-        empty_test = sum(1 for r in test_rows if not str(r.get(key, "")).strip())
+        def key_value(row):
+            # csv.DictReader 对列数少于表头的行，把缺失键填成 None；
+            # 这里 None 与空串都视为"无键值"，避免 str(None) 变成字面量 "None"。
+            value = row.get(key, "")
+            if value is None:
+                return ""
+            return str(value).strip()
+
+        empty_gold = sum(1 for r in gold_rows if not key_value(r))
+        empty_test = sum(1 for r in test_rows if not key_value(r))
         if empty_gold or empty_test:
             raise ValueError(
                 f"--key 列 {key} 存在空值（标准答案 {empty_gold} 行、待测 {empty_test} 行），"
@@ -129,10 +137,10 @@ def score(gold_rows, test_rows, fields, key=None):
         # 按键列分组（列表，支持同键多行，避免字典覆盖丢行）
         gold_by_key = {}
         for r in gold_rows:
-            gold_by_key.setdefault(str(r.get(key, "")), []).append(r)
+            gold_by_key.setdefault(key_value(r), []).append(r)
         test_by_key = {}
         for r in test_rows:
-            test_by_key.setdefault(str(r.get(key, "")), []).append(r)
+            test_by_key.setdefault(key_value(r), []).append(r)
         common = set(gold_by_key) & set(test_by_key)
         only_gold = set(gold_by_key) - set(test_by_key)
         only_test = set(test_by_key) - set(gold_by_key)

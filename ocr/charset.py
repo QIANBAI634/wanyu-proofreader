@@ -59,17 +59,23 @@ def is_rare_cjk(ch):
 
 
 def is_ipa(ch):
-    """是否 IPA 音标 / 音标用拉丁变音字母 / 修饰字母 / 鼻化附加符。
+    """是否 IPA 音标 / 修饰字母 / 组合附加符。
 
     判据优先级：
-    1. detectors.PHONETIC_RUN.fullmatch：仓库唯一的音标字符类（含拉丁变音字母 ŋ œ β θ 等）
-    2. detectors.IPA_BLOCK：IPA 扩展块（U+0250–U+02AF）
-    3. 修饰字母区段 U+02B0–U+02FF 与组合附加符 U+0300–U+036F
+    1. ASCII（A–Z、a–z、数字、标点）一律不是难字，先短路。PHONETIC_RUN 的字符类含
+       A-Za-z，那是「整段看起来像音标写法」的判据，不是「这个字生僻」的判据；
+       权威口径见 detectors.non_repertoire_chars 的 ord(c) > 127。空串同样短路。
+    2. detectors.PHONETIC_RUN.fullmatch：此时 ASCII 已短路，只会命中非 ASCII 的
+       音标字符（ŋ ø ð θ œ β 等，它们在 IPA_BLOCK 之外）
+    3. detectors.IPA_BLOCK：IPA 扩展块（U+0250–U+02AF）
+    4. 修饰字母区段 U+02B0–U+02FF 与组合附加符 U+0300–U+036F
     """
+    if ch.isascii():
+        return False
     if _detectors is not None:
         if _detectors.PHONETIC_RUN.fullmatch(ch):
             return True
-        if ch and ord(ch) in _detectors.IPA_BLOCK:
+        if ord(ch) in _detectors.IPA_BLOCK:
             return True
     return in_ranges(ord(ch), (_MODIFIER_LETTERS, _COMBINING_DIACRITICS))
 

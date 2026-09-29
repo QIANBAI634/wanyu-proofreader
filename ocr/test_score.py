@@ -104,6 +104,14 @@ class TestKeyAlignment(unittest.TestCase):
         with self.assertRaises(ValueError):
             score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
 
+    def test_none_key_raises(self):
+        # 阻断（AI 新提）：csv.DictReader 对列数少于表头的行，缺失键填 None；
+        # None 也必须视为空值，不能变成字面量 "None" 躲过空值保护。
+        gold = [{"页码": None, "词头": "a", "音读": "b", "释义": "c"}]
+        test = [{"页码": None, "词头": "a", "音读": "b", "释义": "c"}]
+        with self.assertRaises(ValueError):
+            score(gold, test, ["页码", "词头", "音读", "释义"], key="页码")
+
 
 class TestCerbounded(unittest.TestCase):
     def test_cer_is_bounded(self):
