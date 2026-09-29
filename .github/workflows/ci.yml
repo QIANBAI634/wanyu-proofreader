@@ -82,6 +82,8 @@ jobs:
         run: |
           python3 scripts/check_compose_structure.py
           python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: OCR scoring regression
+        run: python3 -m unittest discover -s ocr -p 'test_*.py'
       - name: Storage audit invariants
         run: python3 -m unittest discover -s ops -p 'test_*.py'
       - name: Whitespace hygiene
