@@ -222,6 +222,30 @@ class RowLevelBehaviourTests(unittest.TestCase):
         messages = [h.message for h in detectors.analyze_row(row)]
         self.assertIn("non_ipa_range_codepoints", messages)
 
+    def test_placeholders_outside_the_reading_columns_are_detected(self):
+        # The real 15,022-row 正本 carries all 793 placeholders in 词条 and 释义,
+        # and none at all in the reading columns. While this detector sat behind
+        # the reading_fields gate the offline probe reported zero of them.
+        for field in ("词条", "释义"):
+            messages = [h.message for h in detectors.analyze_row(
+                {field: "@4E2D", "拼音": "ka55"})]
+            self.assertIn("missing_glyph_placeholder", messages, field)
+
+    def test_out_of_repertoire_outside_the_reading_columns_is_detected(self):
+        # Same gate, same blind spot: an untypeable character sitting in 释义 was
+        # never looked at, so the column holding the most real text went unread.
+        messages = [h.message for h in detectors.analyze_row(
+            {"词条": "甲", "释义": "Ω"})]
+        self.assertIn("non_ipa_range_codepoints", messages)
+
+    def test_the_meaning_column_suppression_still_holds(self):
+        # Widening the detectors also widened the suppression: a 释义 cell whose
+        # structure is already broken by a placeholder must still report once.
+        row = {"词条": "甲", "释义": "@4E2D \u03a9"}
+        messages = [h.message for h in detectors.analyze_row(row)]
+        self.assertIn("missing_glyph_placeholder", messages)
+        self.assertNotIn("non_ipa_range_codepoints", messages)
+
     def test_a_row_wider_than_its_header_is_reported_not_dropped(self):
         hits = detectors.detect_row_width(4, 2)
         self.assertEqual([detectors.MERGED_COLUMNS], [h.kind for h in hits])
@@ -242,6 +266,15 @@ class ProbeEndToEndTests(unittest.TestCase):
                          detectors.ENCODING_FORM_ANOMALY, detectors.CHAR_OUT_OF_REPERTOIRE,
                          detectors.OUTSIDE_UNICODE_SET):
             self.assertIn(expected, found)
+
+    def test_fixture_carries_placeholders_outside_the_reading_columns(self):
+        # The fixture used to put every placeholder in 拼音, the one reading
+        # column, encoding the opposite of the real distribution — which is why
+        # it was the only ground truth and never challenged the gate.
+        fields = {item["field"] for item in self.findings
+                  if item["kind"] == detectors.MISSING_GLYPH_PLACEHOLDER}
+        self.assertIn("词条", fields)
+        self.assertIn("释义", fields)
 
     def test_extra_cells_are_reported_not_silently_dropped(self):
         hits = [i for i in self.findings if i["message"] == "row_width_differs"]

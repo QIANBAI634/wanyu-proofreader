@@ -1,4 +1,16 @@
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const workflow = require('../pb_hooks/lib/proofreading_workflow.js')
+
+// The same nasalised vowel, spelled both ways. Escapes, never literal characters:
+// the two render identically, so a tool that normalises this file on write would
+// collapse them and every case below would pass as a tautology.
+const PRECOMPOSED = '\u00e3'
+const DECOMPOSED = 'a\u0303'
+const STACKED_ONE = 'a\u0303\u0323'
+const STACKED_TWO = 'a\u0323\u0303'
 
 const baseUrl = process.env.PB_URL || 'http://127.0.0.1:18091'
 const platformEmail = process.env.APP_ADMIN_EMAIL
@@ -222,6 +234,42 @@ const users = await Promise.all([
 ])
 
 try {
+  // ------------------------------------------------- comparison key (#174)
+  // canonicalRow is a pure function of the stored row JSON, so these need no
+  // server. The failure they cover is invisible: two spellings of one nasalised
+  // vowel look identical on screen, so nobody can catch it by reading a diff.
+  //
+  // Escapes, never literal characters. The two spellings render identically, so
+  // a tool that normalises this file on write would silently turn the first case
+  // below into a tautology that still passes and proves nothing.
+  //
+  // Probe the builtin first. A JSVM without String.prototype.normalize would
+  // make every case here pass by accident -- identity compares equal to
+  // identity -- and the false divergences would return behind a green suite.
+  assert.notEqual(PRECOMPOSED, DECOMPOSED,
+    'the two spellings must stay distinct in this file, or the cases below are tautologies')
+  assert.equal(DECOMPOSED.normalize('NFC'), PRECOMPOSED,
+    'JSVM lost String.prototype.normalize: NFC comparison silently became identity')
+  const key = (row) => workflow.canonicalRow(JSON.stringify(row))
+  assert.equal(key({ 词条: PRECOMPOSED }), key({ 词条: DECOMPOSED }),
+    'precomposed and decomposed spellings of one reading are one reading')
+  assert.notEqual(key({ 词条: '\u0251' }), key({ 词条: 'a' }),
+    'U+0251 vs a is a linguistic distinction: NFC must not fold it')
+  // The pair above cannot tell NFC from NFKC on its own: U+0251 comes through
+  // NFKC unchanged, so an NFKC implementation keeps it green. These two are
+  // what actually pins the direction, because NFKC does fold them.
+  assert.notEqual(key({ 词条: '\uff21' }), key({ 词条: 'A' }),
+    'fullwidth A vs A must stay distinct: NFC only, never NFKC')
+  assert.notEqual(key({ 词条: '\u00b2' }), key({ 词条: '2' }),
+    'superscript two vs 2 must stay distinct: NFC only, never NFKC')
+  assert.equal(key({ b: 'x', a: PRECOMPOSED }), key({ a: DECOMPOSED, b: 'x' }),
+    'the comparison key must not depend on key order')
+  assert.notEqual(STACKED_ONE, STACKED_TWO,
+    'the stacked-mark pair must stay distinct in this file too')
+  assert.equal(key({ 词条: STACKED_ONE }), key({ 词条: STACKED_TWO }),
+    'stacked combining marks are canonically ordered before comparing')
+  console.log('Comparison key unit cases passed.')
+
   const matching = await createProject('Three matching', 3, users)
   const matchingSource = await request('/api/collections/project_files/records', {
     method: 'POST',
@@ -342,6 +390,38 @@ try {
     body: { rowJson: JSON.stringify({ 词条: '过期' }), text: '过期', leaseToken: expiredClaim.leaseToken }
   })
 
+
+  // Two proofreaders typing one nasalised vowel in different encodings must
+  // agree. Before #174 this fell through to arbitration and charged both of them
+  // with a mismatch neither of them could see.
+  const nasalised = await createProject('NFC equivalence', 2, users)
+  const nasalisedPage = await createPage(nasalised.id, 1, PRECOMPOSED)
+  await claimAndSubmit(nasalised.id, nasalisedPage.id, users[0], PRECOMPOSED, 'proofread')
+  await claimAndSubmit(nasalised.id, nasalisedPage.id, users[1], DECOMPOSED, 'approved')
+  const nasalisedRecord = await pageRecord(nasalisedPage.id)
+  assert.equal(nasalisedRecord.status, 'approved')
+  assert.equal(nasalisedRecord.mismatch_count, 0, 'an encoding difference is not a disagreement')
+  assert.ok(!nasalisedRecord.last_mismatch_at,
+    'an encoding difference must not stamp last_mismatch_at')
+
+  const storedAttempts = await request(
+    `/api/collections/proofreading_attempts/records?filter=${encodeURIComponent(
+      `page="${nasalisedPage.id}" && proofreader="${users[1].id}"`)}`,
+    { token: superAuth.token }
+  )
+  assert.equal(storedAttempts.items.length, 1)
+  assert.equal(storedAttempts.items[0].outcome, 'matched')
+  assert.equal(storedAttempts.items[0].row_json, JSON.stringify({ 词条: DECOMPOSED }),
+    'the comparison key must never rewrite what the proofreader typed')
+
+  // The reverse direction: normalisation must not decay into close-enough.
+  const distinct = await createProject('U+0251 stays distinct', 2, users)
+  const distinctPage = await createPage(distinct.id, 1, '\u0251')
+  await claimAndSubmit(distinct.id, distinctPage.id, users[0], '\u0251', 'proofread')
+  await claimAndSubmit(distinct.id, distinctPage.id, users[1], 'a', 'arbitration')
+  const distinctRecord = await pageRecord(distinctPage.id)
+  assert.equal(distinctRecord.status, 'arbitration')
+  assert.equal(distinctRecord.mismatch_count, 1)
   console.log('Configurable proofreading quorum integration test passed.')
 } finally {
   for (const projectId of projectIds.reverse()) {

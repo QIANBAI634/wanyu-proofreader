@@ -38,18 +38,18 @@ python3 scripts/corpus_probe/probe_corpus.py            # 或 export WANYU_CORPU
 
 ```
 $ python3 scripts/corpus_probe/probe_corpus.py --csv scripts/corpus_probe/fixtures/mini_corpus.csv
-source: mini_corpus.csv  sha256: b99ce141c6b86ad2…
-rows: 14  findings: 17
+source: mini_corpus.csv  sha256: d8e499c2c80694bf…
+rows: 14  findings: 19
        5  merged_columns [strong]
+       4  missing_glyph_placeholder [strong]
        3  reading_format_invalid [strong]
-       2  missing_glyph_placeholder [strong]
        2  outside_unicode_set [warn]
        2  char_out_of_repertoire [warn]
        1  merged_columns [warn]
        1  encoding_form_anomaly [info]
        1  encoding_form_anomaly [warn]
-by field: 仙游IPA=1, 拼音=8, 莆田IPA=4, 词条=1, 释义=2
-affected rows: 11
+by field: (row)=1, 仙游IPA=1, 拼音=8, 莆田IPA=4, 词条=2, 释义=3
+affected rows: 12
 ```
 
 ## 规则清单
@@ -67,11 +67,21 @@ affected rows: 11
 | `detect_non_repertoire_chars` | `char_out_of_repertoire` | warn | 出现既不在项目启用键盘里、也不在下列放行段中的非 ASCII 码位 | 键盘 JSON 本身是待维护清单，缺键会表现为误报 |
 | `detect_cjk_extension` | `outside_unicode_set` | warn | 出现非 BMP 汉字：扩展 B/C/D/E/F/G/H 与兼容补充表 | 由 #123 决定如何无损表示 |
 
+### 哪些规则看全列，哪些只看记音列
+
+`detect_missing_glyph_placeholders` 与 `detect_non_repertoire_chars` **对每一列都跑**。它们回答的是「这一格里的字符能不能被表示」，与列承担什么语义无关；`词条` 与 `释义` 恰恰是最容易撞上这个问题的两列。
+
+其余规则按列语义分流：`detect_illegal_tone_runs`、`detect_combining_marks` 只在记音列（`reading_fields`），`detect_phonetic_in_meaning` 只在释义列，`detect_column_collapse` 两边都跑。
+
+> 曾经的 bug（#205）：这两个检测器也被 `reading_fields` 门控挡住，在真实 15,022 行正本上 **793 处占位符一处都没报**——因为它们全部落在 `词条` / `释义`，而记音列一处也没有。同步进平台规则会让规则引擎继承同一个盲区。`reading_fields` 仍是硬编码列名，由 #170 换成按列角色查询。
+
 `char_out_of_repertoire` 的放行段（`ALLOWED_NON_REPERTOIRE_RANGES`）= IPA 区段 + 通用标点 + CJK 符号与标点（含 `〔〕`）+ 扩展 A + 统一表意 + 兼容表意 + 所有非 BMP 汉字区段。理由与 #177 R1 一致：**记音列里出现汉字是结构问题（`merged_columns`），不是「校对员打出了打不出的字符」**；非 BMP 汉字已有自己的 kind，不再二次报。
 
 ## 一格只报一次
 
 `analyze_row()` 里有一条抑制规则：某个格子已被 strong 级的 `merged_columns` 或 `missing_glyph_placeholder` 判为结构损坏时，**同一格的 `char_out_of_repertoire` 不再重复报**。它挡的是「`zua42 〔莆〕 Ω`」这类同格混入真正打不出字符的情形（`test_a_broken_cell_reports_once`）。
+
+这条抑制的覆盖面随 #205 一起扩大了：占位符检测不再受记音列门控后，`词条` / `释义` 里带占位符的格子同样会抑制同格的集外字符报——这才是抑制规则原本的意图（一个格子只留一条结构性问题）。
 
 理由写在 #175 的红线里：校对员一旦学会忽略标记，整套机制就失效了。strong 级假阳性最贵，所以 #179 的门槛也按 strong 单独设。
 
@@ -88,6 +98,7 @@ affected rows: 11
 ## 已知边界
 
 - `READING_FIELDS` / `MEANING_FIELDS` 与 `detect_tone_count_mismatch` 里的列名（`拼音` / `莆田IPA` / `仙游IPA` / `释义`）是硬编码的，这正是 #170（列语义标注）要消灭的东西；#170 落地后应换成按角色查询。
+- 占位符与集外字符检测已改为**逐列运行**（#205），但这一改动没有依赖列角色，因此不构成 #170 的前置；#170 落地后此处无需回改，只需把 `reading_fields` 的其余用途换成角色查询。
 - 判定基于「列的语义类别」而非「本批用了哪套拼音方案」，方案级校验属 #114 / #189。
 
 ## 测试

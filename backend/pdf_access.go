@@ -133,15 +133,24 @@ func (s *importService) taskPDF(c *core.RequestEvent) error {
 	return c.Blob(http.StatusOK, "application/pdf", output)
 }
 
-func buildTaskPDF(reader io.ReadSeeker, start, end int, stamp string) ([]byte, error) {
+// buildTaskPDF trims the requested window out of the source and watermarks it.
+// This is the documented degradation path: bounded by the two pages a task
+// shows, never the whole book.
+func buildTaskPDF(reader io.ReadSeeker, start, end int, stamp string, stages *previewStages) ([]byte, error) {
 	pdfapi.DisableConfigDir()
 	config := pdfmodel.NewDefaultConfiguration()
 	config.ValidationMode = pdfmodel.ValidationRelaxed
 	var excerpt bytes.Buffer
-	if err := pdfapi.Trim(reader, &excerpt, []string{fmt.Sprintf("%d-%d", start, end)}, config); err != nil {
+	extractStart := time.Now()
+	err := pdfapi.Trim(reader, &excerpt, []string{fmt.Sprintf("%d-%d", start, end)}, config)
+	stages.markExtract(extractStart)
+	if err != nil {
 		return nil, err
 	}
-	return watermarkTaskPDF(bytes.NewReader(excerpt.Bytes()), stamp)
+	watermarkStart := time.Now()
+	output, err := watermarkTaskPDF(bytes.NewReader(excerpt.Bytes()), stamp)
+	stages.markWatermark(watermarkStart)
+	return output, err
 }
 
 func watermarkTaskPDF(reader io.ReadSeeker, stamp string) ([]byte, error) {
