@@ -155,13 +155,14 @@ class TestDuplicateKey(unittest.TestCase):
 
 class TestIpaCharset(unittest.TestCase):
     def test_eng_is_hard(self):
-        # 阻断3：ŋ（软颚鼻音）必须被判为难字（之前漏判导致难字总数=0）
-        # 注：ŋ→n 是两个音标之间的替换，不属"难字→常见字"的静默替换，
-        #     这里只断言难字被正确识别（审查者的核心诉求）。
+        # 阻断3：ŋ（软颚鼻音）必须被判为难字（之前漏判导致难字总数=0）。
+        # ASCII 短路之后，n 是普通字、ŋ 是难字，ŋ→n 正确落入静默替换，
+        # 因此这里既断言难字被识别，也断言静默替换率非 0（防止把 ASCII 放宽回去）。
         gold = [{"词头": "ɛŋʔ", "音读": "a", "释义": "x"}]
         test = [{"词头": "ɛnʔ", "音读": "a", "释义": "x"}]
         r = score(gold, test, FIELDS)
-        self.assertGreater(r["难字总数"], 0)
+        self.assertEqual(r["难字总数"], 3)  # ɛ、ŋ、ʔ 三个都是 IPA 难字
+        self.assertGreater(r["静默替换率"], 0.0)  # ŋ→n 是难字→普通字
 
     def test_hard_char_to_common_char_is_silent_replace(self):
         # 难字被认成真正的常见字（非音标）时，才应记静默替换
