@@ -124,6 +124,15 @@ SPECS = {
             'revoked_by': {'required': False},
         }),
     },
+    '1789200300_project_artifacts.js': {
+        'indexes': ['idx_project_artifacts_project'],
+        'plans': [
+            ('project_artifacts',
+             'SELECT id FROM project_artifacts WHERE project=? ORDER BY created DESC',
+             ('p',), 'idx_project_artifacts_project'),
+        ],
+        'collection_indexes': ('project_artifacts', 'idx_project_artifacts_project'),
+    },
 }
 FIRST = '1788940000_initial_schema.js'
 
