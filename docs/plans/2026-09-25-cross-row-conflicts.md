@@ -34,13 +34,23 @@ entry_identity_key = 归一化(词头) + " " + 归一化(记音)
 | --- | --- | --- | --- |
 | `duplicate_identity` | `same_identity_different_content` | strong | ✅ 已实现 |
 | `merged_columns`（规则生产者） | `multiple_headwords_in_cell` / `reading_inside_meaning_row` | strong / warn | ✅ 已实现 |
-| `cross_source_conflict` | — | — | ❌ **不实现，缺 #169** |
+| `cross_source_conflict` | `same_identity_across_sources` | strong | ✅ 已实现（identity-v2，依赖 #169） |
 
-`cross_source_conflict` 必须经 #169 的 `sources` 登记来源才能判，而 #169 至今 OPEN、
-`sources` 集合不存在。#178 正文自己要求「来源缺失时只报 `duplicate_identity` /
-`merged_columns`，不报跨来源冲突，避免虚假结论」，所以这里缺的是**依赖**，不是遗漏。
-实现里没有半成品的跨来源代码路径，测试则**显式断言这个 kind 一条都不出现**——
-这样将来 #169 落地时必须是一次有意的改动，而不是某次"顺手就报了"。
+`cross_source_conflict` 必须经 #169 的 `sources` 登记来源才能判。#169 已由 PR #224 合入，
+本支把链路接上：`pages.import_job → import_jobs.source`，回落 `projects.source`，两处都没关联
+时为空串（= 无从判断，绝不猜测）。写入端原先把 `project_file` 当 source 传（#169 之前的替身）——
+文件不是来源：同一来源可分多个文件导入，不同来源也能合成一个文件，用它判会同时造出漏报与误报。
+
+**与 `duplicate_identity` 互斥而不是并列**：一次身份分组里的取值分歧若能归因到两个以上不同的
+已登记来源，就报 `cross_source_conflict`；否则（同来源、或来源不足）报 `duplicate_identity`，
+并把这一组计入重算响应里的 `unattributed_groups`。同一个事实不许有两份疑点——那会把
+`difficulty_tier` 推两次，队列里也会出现同一件事的两条记录。"没报跨来源"因此始终是个可见的计数。
+#178 正文自己要求「来源缺失时只报 `duplicate_identity` / `merged_columns`，不报跨来源冲突，
+避免虚假结论」，这条在 `cross_source_integration.mjs` 的对照组 2 上有断言。
+这条纪律原先是靠"测试显式断言这个 kind 一条都不出现"来守的（#169 之前那样才对）；
+#169 落地后它翻转为相反的两组断言：`cross_source_integration.mjs` 钉住"两个登记来源必须报出来"，
+同来源与无来源两个对照组钉住"不该报的时候绝不报"。`identity_integration.mjs` 里那条
+"声明了但暂不产出"的缺口登记也同步改成"两个 kind 都必须真的可产出且都在 `IDENTITY_KINDS` 里"。
 
 `merged_columns` 与 #125 的**同名同语义、不同生产者**（`producer = rule` vs `ocr`）。
 判据只有两条形状检查：一格内出现 ≥2 个词头片段、释义列含数字调号串或 IPA 记音符。

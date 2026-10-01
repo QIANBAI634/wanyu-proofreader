@@ -98,6 +98,19 @@
             </div>
           </dl>
 
+          <div v-if="tierRows(queue).length" class="queue-tiers" aria-label="按难度层级领取">
+            <button
+              v-for="option in tierRows(queue)"
+              :key="option.key"
+              class="queue-tier"
+              :disabled="claimingProject === queue.project.id"
+              @click="enterProject(queue, option.key)"
+            >{{ option.label }} · {{ option.count }}</button>
+            <span v-if="tierUnlabeled(queue)" class="queue-tier queue-tier--muted">
+              未评估 {{ tierUnlabeled(queue) }}
+            </span>
+          </div>
+
           <footer class="project-work-card__footer">
             <span>{{ queueAction(queue).detail }}</span>
             <button
@@ -128,6 +141,7 @@ import { useAuthStore } from '@/stores/auth'
 import { currentUserId } from '@/services/authService'
 import { claimNextProjectPage, listProjectQueueSummaries } from '@/services/pagesService'
 import { getProofreaderQueueAction, summarizeProofreaderQueues } from '@/lib/workspaceInsights'
+import { tierBreakdown } from '@/lib/taskTiers'
 import { formatClaimConflict, formatPbError } from '@/utils/pbErrors'
 import { saveTaskLease } from '@/lib/taskLease'
 
@@ -168,7 +182,7 @@ async function loadProjects() {
   }
 }
 
-async function enterProject(queue) {
+async function enterProject(queue, tier = '') {
   const projectId = queue?.project?.id
   if (!projectId || claimingProject.value || !queueAction(queue).canEnter) return
   claimingProject.value = projectId
@@ -176,9 +190,11 @@ async function enterProject(queue) {
   try {
     const userId = currentUserId(auth.user)
     if (!userId) throw new Error('登录状态已失效，请重新登录')
-    const page = await claimNextProjectPage(projectId, userId)
+    const page = await claimNextProjectPage(projectId, userId, '', tier)
     if (!page?.id) {
-      error.value = '该项目暂无你可处理的条目。'
+      error.value = tier
+        ? `${tier} 类暂时没有可领取的条目，换个层级或按默认顺序领一条。`
+        : '该项目暂无你可处理的条目。'
       await loadProjects()
       return
     }
@@ -199,6 +215,15 @@ async function enterProject(queue) {
 
 function queueAction(queue) {
   return getProofreaderQueueAction(queue)
+}
+
+// #162：层级是渐进增强。没算过标签的项目在这里就是空数组，卡片与改动前一致。
+function tierRows(queue) {
+  return tierBreakdown(queue)?.options ?? []
+}
+
+function tierUnlabeled(queue) {
+  return tierBreakdown(queue)?.unlabeledCount ?? 0
 }
 
 function progressPct(queue) {

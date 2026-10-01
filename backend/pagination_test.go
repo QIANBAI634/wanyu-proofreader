@@ -126,6 +126,19 @@ func TestPaginationAndQueueIsolation(t *testing.T) {
 	if row["claimable"] != float64(100) || row["nextPage"].(map[string]any)["page_number"] != float64(1) {
 		t.Fatalf("queue: %v", row)
 	}
+	// #162：没算过 tier 的条目要落在 "unlabeled"，不能合成成 "unknown"。
+	// 空串 = 从没算过，"unknown" = 算过但信号不足，#162 的渐进增强靠这两者可区分才成立。
+	assertTiers(t, request("/api/fangji/proofreading-queues", reader, 200), map[string]float64{
+		"A": 0, "B": 0, "C": 0, "other": 0, "unlabeled": 100,
+	}, 0)
+	if _, err := app.DB().NewQuery(`UPDATE pages SET difficulty_tier=CASE
+		WHEN page_number<=3 THEN 'A' WHEN page_number<=5 THEN 'B'
+		WHEN page_number=6 THEN 'unknown' ELSE '' END WHERE project={:project}`).Bind(dbx.Params{"project": project.Id}).Execute(); err != nil {
+		t.Fatal(err)
+	}
+	assertTiers(t, request("/api/fangji/proofreading-queues", reader, 200), map[string]float64{
+		"A": 3, "B": 2, "C": 0, "other": 1, "unlabeled": 94,
+	}, 6)
 	// A previous submission prevents this user from claiming that same round.
 	if _, err := app.DB().NewQuery(`INSERT INTO proofreading_attempts(id,page,project,proofreader,round,kind,pass_no) VALUES ('attempt00000001','page00000000001',{:project},{:user},1,'proofread',1)`).Bind(dbx.Params{"project": project.Id, "user": reader.Id}).Execute(); err != nil {
 		t.Fatal(err)
@@ -135,6 +148,9 @@ func TestPaginationAndQueueIsolation(t *testing.T) {
 	if row["claimable"] != float64(99) || row["nextPage"].(map[string]any)["page_number"] != float64(2) {
 		t.Fatalf("repeat claim exposed: %v", row)
 	}
+	// 自己交过的第 1 页退出可领取计数，它的档位也必须同步退出——否则大厅筛出"A 类 3 条"
+	// 而实际只能领到 2 条，筛选就是在说谎。
+	assertTiers(t, queues, map[string]float64{"A": 2, "B": 2, "C": 0, "other": 1, "unlabeled": 94}, 5)
 	// An active lease owned by another user is unavailable until expiration.
 	if _, err := app.DB().NewQuery(`UPDATE pages SET status='claimed',proofreader={:user} WHERE id='page00000000002'`).Bind(dbx.Params{"user": outsider.Id}).Execute(); err != nil {
 		t.Fatal(err)
@@ -147,6 +163,8 @@ func TestPaginationAndQueueIsolation(t *testing.T) {
 	if row["claimable"] != float64(98) {
 		t.Fatalf("active other lease claimable: %v", row)
 	}
+	// 别人手上还有有效租约的第 2 页是 A 类：它不可领取，A 就得跟着降。
+	assertTiers(t, queues, map[string]float64{"A": 1, "B": 2, "C": 0, "other": 1, "unlabeled": 94}, 4)
 	if _, err := app.DB().NewQuery(`UPDATE task_leases SET expires_at='2020-01-01 00:00:00.000Z'`).Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +172,42 @@ func TestPaginationAndQueueIsolation(t *testing.T) {
 	row = queues["items"].([]any)[0].(map[string]any)
 	if row["claimable"] != float64(99) {
 		t.Fatalf("expired lease not claimable: %v", row)
+	}
+	// 租约过期后第 2 页重新可领，A 类回到 2 条；自己交过的那条仍然不在里面。
+	assertTiers(t, queues, map[string]float64{"A": 2, "B": 2, "C": 0, "other": 1, "unlabeled": 94}, 5)
+}
+
+// assertTiers 检查队列响应里第一项目的层级分档，并钉住两条不变量：
+// 五档之和 == claimable（每个可领取条目恰好落在一个桶里，谁都不该被漏掉或重复计），
+// 以及 tierLabeled == claimable - unlabeled。只比各个数字是否相等，会放过
+// "某条既没进 A 也没进 unlabeled" 这种少计——而它正好是筛选数字虚高的形态。
+func assertTiers(t *testing.T, payload map[string]any, want map[string]float64, labeled float64) {
+	t.Helper()
+	row, ok := payload["items"].([]any)[0].(map[string]any)
+	if !ok {
+		t.Fatalf("队列响应里没有项目: %v", payload)
+	}
+	tiers, ok := row["tiers"].(map[string]any)
+	if !ok {
+		t.Fatalf("响应缺少 tiers 字段（#162 的层级计数）: %v", row)
+	}
+	sum := float64(0)
+	for name, expected := range want {
+		got, ok := tiers[name].(float64)
+		if !ok {
+			t.Fatalf("tiers 缺少 %q 或类型不对: %v", name, tiers)
+		}
+		if got != expected {
+			t.Errorf("tiers.%s 应为 %v，实得 %v（全部: %v）", name, expected, got, tiers)
+		}
+		sum += got
+	}
+	claimable, _ := row["claimable"].(float64)
+	if sum != claimable {
+		t.Errorf("五档之和 %v 与 claimable %v 不等：有可领取条目没落进任何一个桶", sum, claimable)
+	}
+	if got, _ := row["tierLabeled"].(float64); got != labeled {
+		t.Errorf("tierLabeled 应为 %v，实得 %v", labeled, got)
 	}
 }
 

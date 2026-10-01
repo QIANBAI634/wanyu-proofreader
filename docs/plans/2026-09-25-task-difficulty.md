@@ -114,6 +114,25 @@ basis，要「人说过卡在哪」读 `blocked_reason`**；后者为空表示�
 不含 `difficulty_tier` / `difficulty_basis_json` / `difficulty_version` / `blocked_reason`
 （也不含 `round`/`pass_no`）——将来谁把 payload 从显式字段列表改成展开写法，这条会红。
 
+### 6.1 #162 落地的接口（2026-09-30）
+
+- **领取**：`POST /api/fangji/projects/{id}/claim` 的 body 增加可选 `tier`（白名单 `A|B|C`）。
+  不传 = 服务端先在标了 A 的条目里找，找不到再按原来的 `page_number,id` 顺序找全量；
+  传了 = 只在该层级里找，找不到就 404（**不许悄悄给一条别的层级**，否则大厅的筛选在说谎）。
+  「优先 A」是两层 pass 的顺序本身，不是开关：一个层级标签都没算过时第一层必然空手，
+  第二层与改动前逐字相同，所以渐进增强是被结构保证的。
+- **例外**：手上还有未提交任务时，claim 先续发那条正在手的任务，与 `tier` 无关。
+  层级是"领新任务"时的筛选，不是"撤回我已领任务"的理由——把它做成撤回会让志愿者
+  卡在已领条目上。`tier_dispatch_integration.mjs` 把这条行为钉成了断言。
+- **大厅**：`GET /api/fangji/proofreading-queues` 每个项目增加
+  `tiers: {A,B,C,other,unlabeled}` 与 `tierLabeled`，口径是**可领取**条目
+  （自己交过的、别人持有有效租约的都不计），不是条目总数。五档之和恒等于 `claimable`，
+  由 `pagination_test.go` 的 `assertTiers` 钉住。
+- **红线仍然成立**：`claim` 响应里没有 `difficulty_tier`。分层由服务端完成，
+  校对员拿到的是"哪一条"，不是"这条被机器判为几等"——后者的输入含 `frequent_arbitration`
+  （该列历史仲裁进入率），那已经是关于别人反复在这条上出事的线索。
+  `tier_dispatch_integration.mjs` 在领取响应上逐字段断言这些名字不出现。
+
 ## 7. 复算与触发
 
 不新造触发器：tier 在 #177 的两条路径里顺手刷新（单条重算 / 项目全量重算），
@@ -157,3 +176,10 @@ basis，要「人说过卡在哪」读 `blocked_reason`**；后者为空表示�
 以及 tier 在没有 #170 的现在**集中在 C 与 unknown 两档**（这一句说的是上面那份检出前的分布；
 跨行疑点落库并重算之后 unknown 会往下走，但 A 档两条判据今天仍然都不可达）。
 等 #170 落地，A/B 才可能出现，届时这张表要重测一遍再谈 #162 的默认排序。
+
+> **2026-09-30 更正这段的时态**：#170 已随 PR #226 合入，列角色进了规则与难度输入，
+> `pure_transcription`（A）与 `reading_and_meaning_change`（B）都不是"不可达"了——
+> `tier_dispatch_integration.mjs` 里 A 与 B 各由真实重算产出并有断言。
+> 但**上面那张 10k 分布表仍然是 #170 之前的快照，本支没有重测它**：重测要再跑一次
+> 10k 行的实测并把新数字写回这里，那一步没做就不该改动表格本体。要拿真实分布，
+> 请重新执行本文件 §9 的测量流程，不要引用这份旧快照谈 A/B 占比。

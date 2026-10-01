@@ -439,6 +439,12 @@ tr:hover td { background: var(--gray-50); }
 .queue-metrics div { padding: .8rem .55rem; border-right: 1px solid var(--gray-100); }
 .queue-metrics div:last-child { border-right: 0; }
 .queue-metrics dt { color: var(--gray-500); font-size: .72rem; }
+/* #162 大厅的层级领取。没算过标签的项目不渲染这一块，所以它必须能安静地不存在。 */
+.queue-tiers { display: flex; flex-wrap: wrap; gap: .4rem; padding: .7rem .2rem 0; }
+.queue-tier { border: 1px solid var(--gray-200); border-radius: 999px; background: var(--paper); padding: .3rem .7rem; font-size: .78rem; cursor: pointer; }
+.queue-tier:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.queue-tier:disabled { cursor: default; opacity: .55; }
+.queue-tier--muted { border-style: dashed; color: var(--gray-500); cursor: default; }
 .queue-metrics dd { margin-top: .25rem; color: var(--ink); font-size: 1rem; font-weight: 700; }
 .project-work-card__footer > span { color: var(--gray-500); font-size: .78rem; }
 .skeleton-card { min-height: 280px; align-content: start; pointer-events: none; }
@@ -538,7 +544,7 @@ button.field-hint-chip { cursor: pointer; }
 button.field-hint-chip:hover { background: var(--gray-100); }
 button.field-hint-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .field-hint-reason { color: var(--gray-600); font-size: .78rem; line-height: 1.5; }
-.field-hint-overflow, .field-hint-truncated { color: var(--gray-500); font-size: .74rem; }
+.field-hint-overflow, .field-hint-truncated, .field-hint-gated { color: var(--gray-500); font-size: .74rem; }
 .proofread-textarea.form-control {
   min-height: 104px;
   border: 0;
