@@ -30,15 +30,22 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
     pdf_page: page.getInt("pdf_page"),
     status: page.getString("status"),
     proofreader: page.getString("proofreader"),
+    // 这里**不放 difficulty_tier**：docs/plans/2026-09-25-task-difficulty.md §6 的红线是
+    // tier 不得出现在校对端任何响应里（它的输入含"该列历史仲裁进入率"，泄露的就是
+    // 别人在这条上反复出事这件事）。#162 的分层是服务端按层级挑选 + 大厅的项目级计数，
+    // 两者都不需要把某一条的档位告诉校对员。
     leaseToken: issued.token,
     leaseExpiresAt: issued.expiresAt
   })
   const userId = auth.id
   const projectId = c.request.pathValue("projectId")
   let response = null
-  const claimBody = new DynamicModel({ previousTaskId: "" })
+  const claimBody = new DynamicModel({ previousTaskId: "", tier: "" })
   if (c.request.contentLength !== 0) c.bindBody(claimBody)
   const previousTaskId = String(claimBody.previousTaskId || "")
+  // #162：层级是白名单值，不是自由文本——它会参与筛选，也不该被拿来拼过滤表达式。
+  const tier = String(claimBody.tier || "").trim()
+  if (tier && !["A", "B", "C"].includes(tier)) throw new BadRequestError("难度层级只能是 A、B 或 C")
 
   $app.runInTransaction((txDao) => {
     try {
@@ -89,36 +96,55 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
       }
     }
     filters.push(queueFilter)
+    // #162 分层派发。两层 pass 的顺序就是"默认优先领取 A 类"的全部实现：
+    // 第一层只在标了 A 的条目里找，第二层按今天的原序找全量。
+    // 渐进增强因此不靠开关或"有没有算过 tier"的判断来保证——没有标签数据时
+    // （difficulty_tier 为空串）第一层必然空手，第二层的顺序与筛选条件与改动前逐字相同。
+    // 显式带 tier 时只有一层，且找不到就 404：宁可明说"这个层级暂时没有"，
+    // 也不能悄悄给一条别的层级——那会让大厅上的筛选控件说谎。
+    const passes = tier ? [tier] : ["A", ""]
     const seen = new Set()
+    // filters 在外、passes 在内。filters[0] 是 #86 的「同 PDF 页优先」，它必须排在层级之前：
+    // 层级在外层时第一遍会扫遍**全项目**找 A，只要还剩一条 A，同页的兄弟条目就永远轮不到
+    // ——那等于把 #86 这条特性在下一次算出 tier 的项目里直接下线（#232 的评审阻断项）。
+    // 每个 filter 只取一次候选、两层 pass 复用同一份数组：领取是校对员最热的一条路由，
+    // 为"优先 A"再把十万条读一遍不换来任何信息（评审的非阻断性能项）。
     for (const filter of filters) {
       if (response) break
       const candidates = txDao.findRecordsByFilter("pages", filter, "page_number,id", 100000, 0)
-      for (const page of candidates) {
-        if (seen.has(page.id)) continue
-        seen.add(page.id)
-        const status = page.getString("status")
-        let queueStatus = status
-        if (status === "claimed" || status === "proofreading") {
-          const existingLease = proofLeaseForPage(txDao, page.id)
-          if (existingLease && !proofLeaseExpired(existingLease)) continue
-          queueStatus = proofQueueStatusForPage(page, existingLease)
-          if (!existingLease) proofClearLease(txDao, page)
+      for (const passTier of passes) {
+        if (response) break
+        for (const page of candidates) {
+          // 层级筛选必须在 seen 之前：先记 seen 会让第二层把整批跳过，
+          // 结果"优先 A"变成"只看 A，别的层级一条都领不到"。
+          if (passTier && page.getString("difficulty_tier") !== passTier) continue
+          if (seen.has(page.id)) continue
+          seen.add(page.id)
+          const status = page.getString("status")
+          let queueStatus = status
+          if (status === "claimed" || status === "proofreading") {
+            const existingLease = proofLeaseForPage(txDao, page.id)
+            if (existingLease && !proofLeaseExpired(existingLease)) continue
+            queueStatus = proofQueueStatusForPage(page, existingLease)
+            if (!existingLease) proofClearLease(txDao, page)
+          }
+          const attempts = proofAttempts(txDao, page)
+          if (attempts.some((attempt) => attempt.getString("proofreader") === userId)) continue
+          if (attempts.length >= proofRequiredProofreads(txDao, projectId)) {
+            proofEvaluatePage(txDao, page)
+            continue
+          }
+          queueStatus = attempts.length ? "proofread" : "pending"
+          const issued = proofIssueLease(txDao, page, userId, queueStatus)
+          page.set("proofreader", userId)
+          page.set("status", "proofreading")
+          txDao.save(page)
+          response = summarize(page, issued)
+          break
         }
-        const attempts = proofAttempts(txDao, page)
-        if (attempts.some((attempt) => attempt.getString("proofreader") === userId)) continue
-        if (attempts.length >= proofRequiredProofreads(txDao, projectId)) {
-          proofEvaluatePage(txDao, page)
-          continue
-        }
-        queueStatus = attempts.length ? "proofread" : "pending"
-        const issued = proofIssueLease(txDao, page, userId, queueStatus)
-        page.set("proofreader", userId)
-        page.set("status", "proofreading")
-        txDao.save(page)
-        response = summarize(page, issued)
-        break
       }
     }
+    if (!response && tier) throw new NotFoundError(`${tier} 级暂时没有可领取的条目`)
   })
 
   return c.json(200, response)

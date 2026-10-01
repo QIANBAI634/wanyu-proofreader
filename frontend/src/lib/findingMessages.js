@@ -105,6 +105,15 @@ const MESSAGES = {
     const partners = count(params?.partner_count)
     return `与其他 ${partners} 条同身份（词头 + 记音相同）但${differs.length ? `「${differs.slice(0, 3).join('、')}」` : '其他'}列不一致，需人工看一眼是否真是两个条目`
   },
+  // identity-v2 起，能归因到不同登记来源的那批分歧走这个键（与上一条不会同时命中同一条目）。
+  // sources 里是内部记录 id，措辞只报数量不报 id：对校对员有信息量的是"几份材料互斥"，
+  // id 既读不懂也不需要读。
+  same_identity_across_sources: (params) => {
+    const differs = Array.isArray(params?.differs_on) ? params.differs_on : []
+    const sources = Array.isArray(params?.sources) ? params.sources.length : 0
+    const partners = count(params?.partner_count)
+    return `与其他 ${partners} 条同身份（词头 + 记音相同），而${differs.length ? `「${differs.slice(0, 3).join('、')}」` : '其他'}列在 ${sources} 个登记来源下取值不同；需按材料判断谁对，不要直接改写`
+  },
   multiple_headwords_in_cell: (params) =>
     `该格疑似挤进 ${count(params?.segments)} 个词头，需先拆列再判内容`,
   reading_inside_meaning_row: (params) => {

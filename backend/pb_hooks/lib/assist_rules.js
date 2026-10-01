@@ -127,6 +127,69 @@ function makeContext({ projectId = "", keyboards = [], roles = null, readingFiel
   }
 }
 
+// ---- 命中区间（evidence.char_offsets）----
+//
+// 口径：`[[start, end), …]`，按**码位**计、半开区间，必须与消费端一字不差
+// （`frontend/src/lib/fieldHints.js` 的 `locateSpan` 同口径，再由它换算 UTF-16 选区）。
+// 两端各按各的直觉写（一端含尾、一端不含；一数码位、一端 UTF-16）时的症状是高亮整体
+// 偏移一格，或遇到补充平面字符（𰻞、PUA 缺字）时错位——那不报错，只像"标错了地方"。
+//
+// 放在规则文件里而不是独立模块：本文件的既定约束是"纯函数、不 require 别的 lib"，
+// 为的是每条规则都能在 node 里直接跑单测（`scripts/assist/lib/labeling.mjs` 就这么用它）；
+// 而 hook 侧的 `${__hooks}` 解析在 node 里不存在。别的 lib 需要时从这里的导出取。
+function mergeSpans(indices) {
+  const merged = []
+  let start = null
+  let previous = null
+  for (const index of [...indices].sort((a, b) => a - b)) {
+    if (start === null) {
+      start = index
+    } else if (index !== previous + 1) {
+      merged.push([start, previous + 1])
+      start = index
+    }
+    previous = index
+  }
+  if (start !== null) merged.push([start, previous + 1])
+  return merged
+}
+
+// 逐码位判据 → 区间；`minLength` 丢掉短于判据门槛的碎片
+// （R6 的靶子是三位以上的数字串，标出一个孤立数字会把人引向错的地方）。
+function predicateSpans(text, isHit, minLength = 1) {
+  const indices = []
+  let index = 0
+  for (const ch of Array.from(String(text ?? ""))) {
+    if (isHit(ch)) indices.push(index)
+    index += 1
+  }
+  return mergeSpans(indices).filter(([start, end]) => end - start >= minLength)
+}
+
+// 命中内容是在"加工过的串"上判出来的（R6 先剔除缺字占位符）时，把它们定位回**原始值**。
+// 任一串找不到就整体返回空数组，绝不给近似位置：猜出来的区间会把高亮打在错的字上，
+// 比没有区间更糟——没有区间时前端只降级为"聚焦该字段"。
+function literalSpans(text, needles) {
+  const source = String(text ?? "")
+  const merged = []
+  let cursor = 0
+  for (const needle of needles ?? []) {
+    const token = String(needle)
+    const utf16Start = source.indexOf(token, cursor)
+    if (utf16Start < 0) return []
+    const start = Array.from(source.slice(0, utf16Start)).length
+    const end = start + Array.from(token).length
+    const last = merged[merged.length - 1]
+    if (last && start === last[1]) last[1] = end
+    else merged.push([start, end])
+    cursor = utf16Start + token.length
+  }
+  return merged
+}
+
+// 有区间才挂区间；空数组留在 evidence 里只会让前端多做一次无谓降级判断。
+const spanEvidence = (spans) => (spans.length ? { char_offsets: spans } : {})
+
 const finding = (kind, severity, field, message_key, params = {}, evidence = {}) =>
   ({ kind, severity, field, message_key, params, evidence })
 
@@ -142,7 +205,11 @@ function ruleCharOutOfRepertoire(ctx, row) {
     }
     if (!seen.size) continue
     out.push(finding("char_out_of_repertoire", "warn", field, "non_ipa_range_codepoints",
-      { codepoints: [...seen].sort((a, b) => a - b).map(codepointLabel) }))
+      { codepoints: [...seen].sort((a, b) => a - b).map(codepointLabel) },
+      spanEvidence(predicateSpans(value, (ch) => {
+        const code = ch.codePointAt(0)
+        return !inAllowed(code) && !ctx.repertoire.has(code)
+      }))))
   }
   return out
 }
@@ -167,7 +234,7 @@ function ruleConfusables(ctx, row) {
       suggestions: hits.map((hit) => ({ found: hit.found, suggested: hit.suggested })),
       positions: hits.map((hit) => hit.position),
       hit_count: hits.length
-    }))
+    }, spanEvidence(predicateSpans(value, (ch) => ctx.confusables.get(ch)))))
   }
   return out
 }
@@ -190,7 +257,8 @@ function ruleCombiningMarks(ctx, row) {
     }
     if (!marks.size) continue
     out.push(finding("encoding_form_anomaly", "info", field, "combining_marks_present",
-      { marks: [...marks].sort((a, b) => a - b).map(codepointLabel) }))
+      { marks: [...marks].sort((a, b) => a - b).map(codepointLabel) },
+      spanEvidence(predicateSpans(value, isCombining))))
   }
   return out
 }
@@ -267,8 +335,10 @@ function ruleReadingFormat(ctx, row) {
     // 两条都报会让同一格挂上两个 strong。
     const runs = (stripped.match(/\d{3,}/g) ?? []).filter((run) => !LEGAL_LONG_TONES.includes(run))
     if (runs.length) {
+      // 区间回到**原始值**上算：runs 是在剔除占位符之后的串上匹配的，
+      // 直接拿那份串的下标会整体偏移。匹配不上就只给消息不给区间。
       out.push(finding("reading_format_invalid", "strong", field, "long_digit_run",
-        { runs, run_count: runs.length }))
+        { runs, run_count: runs.length }, spanEvidence(literalSpans(value, runs))))
     }
     counts[field] = toneDigits(value)
   }
@@ -439,6 +509,9 @@ module.exports = {
   PAGE_DENSITY_MIN_EXTRA,
   PAGE_DENSITY_MIN_PAGES,
   codepointLabel,
+  literalSpans,
+  mergeSpans,
+  predicateSpans,
   isEmpty,
   inAllowed,
   isCombining,

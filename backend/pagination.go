@@ -128,7 +128,7 @@ const queueCTE = `WITH accessible AS (
  SELECT p.* FROM projects p JOIN project_memberships m ON m.project=p.id
  WHERE m.user={:user} AND m.role='proofreader' AND p.admin != {:user}
 ), classified AS (
- SELECT p.project,p.id,p.page_number,p.pdf_page,p.status,
+ SELECT p.project,p.id,p.page_number,p.pdf_page,p.status,COALESCE(p.difficulty_tier,'') AS tier,
   (p.status IN ('claimed','proofreading') AND p.proofreader={:user}) AS active_mine,
   (p.status IN ('pending','proofread') OR (p.status IN ('claimed','proofreading') AND (l.id IS NULL OR l.expires_at <= {:now})))
   AND NOT (p.status IN ('claimed','proofreading') AND p.proofreader={:user})
@@ -140,6 +140,11 @@ const queueCTE = `WITH accessible AS (
  SELECT pr.id,pr.name,pr.description,COUNT(c.id) AS total,
  COALESCE(SUM(c.status='approved'),0) AS completed,COALESCE(SUM(c.active_mine),0) AS active_mine,
  COALESCE(SUM(c.claimable),0) AS claimable,
+ COALESCE(SUM(c.claimable AND c.tier='A'),0) AS tier_a,
+ COALESCE(SUM(c.claimable AND c.tier='B'),0) AS tier_b,
+ COALESCE(SUM(c.claimable AND c.tier='C'),0) AS tier_c,
+ COALESCE(SUM(c.claimable AND c.tier NOT IN ('A','B','C','')),0) AS tier_other,
+ COALESCE(SUM(c.claimable AND c.tier=''),0) AS tier_unlabeled,
  COALESCE(MIN(CASE WHEN c.active_mine THEN printf('%020d%020d',c.page_number,c.pdf_page)||c.id END),'') AS active_key,
  COALESCE(MIN(CASE WHEN c.claimable THEN printf('%020d%020d',c.page_number,c.pdf_page)||c.id END),'') AS next_key
  FROM accessible pr LEFT JOIN classified c ON c.project=pr.id GROUP BY pr.id
@@ -183,6 +188,11 @@ func (s *importService) proofreadingQueues(e *core.RequestEvent) error {
 			Completed   int    `db:"completed"`
 			Active      int    `db:"active_mine"`
 			Claimable   int    `db:"claimable"`
+			TierA       int    `db:"tier_a"`
+			TierB       int    `db:"tier_b"`
+			TierC       int    `db:"tier_c"`
+			TierOther   int    `db:"tier_other"`
+			TierBlank   int    `db:"tier_unlabeled"`
 			ActiveKey   string `db:"active_key"`
 			NextKey     string `db:"next_key"`
 		}{}
@@ -192,7 +202,20 @@ func (s *importService) proofreadingQueues(e *core.RequestEvent) error {
 		}
 		items := []map[string]any{}
 		for _, row := range rows {
-			items = append(items, map[string]any{"project": map[string]any{"id": row.ID, "name": row.Name, "description": row.Description}, "total": row.Total, "completed": row.Completed, "activeMine": row.Active, "claimable": row.Claimable, "activePage": queuePage(row.ActiveKey), "nextPage": queuePage(row.NextKey)})
+			items = append(items, map[string]any{
+				"project":    map[string]any{"id": row.ID, "name": row.Name, "description": row.Description},
+				"total":      row.Total,
+				"completed":  row.Completed,
+				"activeMine": row.Active,
+				"claimable":  row.Claimable,
+				// #162：每个可领取条目恰好落在一个桶里，所以五档之和 == claimable。
+				// "unlabeled" 是 difficulty_tier 为空串（从没算过），与 "other"（算过但
+				// 信号不足，值就是 unknown）是两件事——大厅靠它决定要不要显示层级筛选。
+				"tiers":       map[string]int{"A": row.TierA, "B": row.TierB, "C": row.TierC, "other": row.TierOther, "unlabeled": row.TierBlank},
+				"tierLabeled": row.TierA + row.TierB + row.TierC + row.TierOther,
+				"activePage":  queuePage(row.ActiveKey),
+				"nextPage":    queuePage(row.NextKey),
+			})
 		}
 		result = map[string]any{"items": items, "page": page, "perPage": size, "totalItems": summary.Total, "totalPages": totalPages, "summary": map[string]int{"activeProjects": summary.Active, "availableProjects": summary.Available, "completedItems": summary.Completed, "totalItems": summary.Items}}
 		return nil

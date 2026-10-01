@@ -138,7 +138,7 @@ FindingDraft = {
                                    // anchor **每条**必填，不区分行级与非行级：#208 的生产者一律过
                                    // anchored()，格级也落 anchor: "entry"；#178 的跨行生产者（在 #212）
                                    // 每条都带 anchor 与 page，另按疑点种类带 partners（duplicate_identity）
-                                   // 或 char_offsets（merged_columns 的两条一条带、一条不带）。
+                                   // 或 char_offsets（merged_columns 的两条都带区间，!231 之后）。
                                    // 所以读取端不必先判作用域再决定"这条有没有口径可读"。
   produced_at
 }

@@ -21,5 +21,7 @@
   { "suite": "rare_characters_integration.mjs", "ci_matrix": false, "ci_runner": "run_rare_characters_integration.py", "note": "restarts the server to prove persistence" },
   { "suite": "source_registry_integration.mjs", "ci_matrix": true },
   { "suite": "column_roles_integration.mjs", "ci_matrix": true },
-  { "suite": "gate_release_integration.mjs", "ci_matrix": true }
+  { "suite": "gate_release_integration.mjs", "ci_matrix": true },
+  { "suite": "cross_source_integration.mjs", "ci_matrix": true },
+  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true }
 ]

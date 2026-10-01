@@ -39,12 +39,22 @@ function ruleEngineMessageKeys() {
 }
 
 // #178 的跨行检出：finding 字面量形状是 { kind, severity, field, message_key, ... }
+// 但 message_key 现在是 `cond ? "a" : "b"`（同身份分歧按能否归因到不同登记来源二选一），
+// 单形状的正则会把两个键一起漏掉。两种形状都抽，并把"抽到的数量"当断言下限——
+// 抽不到就是抽取失效，不能因为返回空集合而让"每个键都有措辞"这条变成空真。
 function identityMessageKeys() {
   const source = readFileSync(identityLib, 'utf8')
-  const pattern = /kind:\s*"[a-z_]+",\s*severity:\s*"(?:info|warn|strong)",\s*[^,]+,\s*\n?\s*message_key:\s*"([a-z_]+)"/g
+  const patterns = [
+    /message_key:\s*[^:;{}?\n]*\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"/g,
+    /message_key:\s*"([a-z_]+)"/g
+  ]
   const keys = new Set()
-  for (const match of source.matchAll(pattern)) keys.add(match[1])
-  assert.ok(keys.size >= 3, `expected the identity detector's message keys, got ${[...keys]}`)
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      for (const group of match.slice(1)) if (group) keys.add(group)
+    }
+  }
+  assert.ok(keys.size >= 4, `expected the identity detector's message keys, got ${[...keys]}`)
   return keys
 }
 
@@ -160,4 +170,23 @@ test('renderHints is empty for no data and drops nothing otherwise', () => {
   })
   assert.equal(hints[1].highlight, false)
   assert.equal(hints[1].field, '释义')
+})
+
+// identity-v2 的跨来源键：措辞要说清"几份材料互斥、差在哪几列"，
+// 且不许把 sources 里的内部记录 id 念给校对员（读不懂，也没必要读）。
+test('cross-source wording names the source count, not the ids or the content', () => {
+  const text = renderFindingMessage({
+    key: 'same_identity_across_sources',
+    params: { differs_on: ['释义', '地区'], partner_count: 1, sources: ['src0000000aaaa', 'src0000000bbbb'] }
+  })
+  assert.equal(text.startsWith(FALLBACK_PREFIX), false, `新键没配上措辞：${text}`)
+  assert.match(text, /2 个登记来源/)
+  assert.match(text, /「释义、地区」/)
+  for (const id of ['src0000000aaaa', 'src0000000bbbb']) {
+    assert.equal(text.includes(id), false, `措辞里出现了来源 id ${id}：${text}`)
+  }
+  // 缺字段时不许抛错，也不许出现 NaN：措辞层是最后一道不会红的地方。
+  const bare = renderFindingMessage({ key: 'same_identity_across_sources' })
+  assert.equal(bare.includes('NaN'), false, bare)
+  assert.equal(bare.startsWith(FALLBACK_PREFIX), false, bare)
 })

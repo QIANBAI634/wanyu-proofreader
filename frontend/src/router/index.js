@@ -81,6 +81,11 @@ const routes = [
         component: () => import('@/views/admin/SourcesView.vue')
       },
       {
+        path: 'gate-rules',
+        name: 'GateRules',
+        component: () => import('@/views/admin/GateRulesView.vue')
+      },
+      {
         path: 'projects/:projectId/arbitration/:pageId',
         name: 'Arbitration',
         component: () => import('@/views/admin/ArbitrationView.vue')
