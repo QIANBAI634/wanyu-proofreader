@@ -102,6 +102,19 @@ try {
   const pages = (await request(`/api/collections/pages/records?filter=${encodeURIComponent(`project="${project.id}"`)}&sort=page_number&perPage=50`, { token })).items
   assert.equal(pages.length, 3)
 
+  // 回归：导入进行中（status=importing）的暂存条目不得被导出烧成产物。
+  // 用 superuser 直接造一条 importing 页，导出的期望集（pages 数组）不包含它。
+  await request('/api/collections/pages/records', {
+    method: 'POST', token: superAuth.token, expected: 200,
+    body: {
+      project: project.id, page_number: 9999, pdf_page: 9999,
+      status: 'importing',
+      ocr_row_json: JSON.stringify({ 词条: '暂存半行', 释义: '不应出现' }),
+      row_headers_json: JSON.stringify(['词条', '释义']),
+      ocr_text: '暂存半行 不应出现'
+    }
+  })
+
   // 导出 → 下载 → 与前端函数重建的期望串逐字节比对。
   const artifact = await request(`/api/fangji/projects/${project.id}/exports/csv`, { method: 'POST', token, expected: 201 })
   assert.equal(artifact.kind, 'csv')
@@ -113,7 +126,8 @@ try {
   const expected = buildExpectedCsv(pages)
   assert.equal(bytes.toString('utf8'), expected)
   assert.ok(expected.includes(sample))
-  console.log('PASS: server export byte-identical to frontend export logic, rare/IPA/PUA chars intact')
+  assert.ok(!bytes.toString('utf8').includes('暂存半行'), 'importing page must be excluded from export')
+  console.log('PASS: server export byte-identical to frontend export logic, rare/IPA/PUA chars intact, importing excluded')
 
   // 版本历史：再导一次 → 两条 artifact 记录，created 递增。
   const artifact2 = await request(`/api/fangji/projects/${project.id}/exports/csv`, { method: 'POST', token, expected: 201 })

@@ -8,7 +8,8 @@ import {
   locateSpan,
   pageLevelHints,
   pageLevelOverflow,
-  prepareFieldHints
+  prepareFieldHints,
+  gatedNotice
 } from '../src/lib/fieldHints.js'
 
 // #176 §3.1 的一条真实形状（含 message_key 与 evidence），供各用例复用。
@@ -176,4 +177,19 @@ test('locateSpan returns null for missing or malformed offsets (定位降级为�
   assert.equal(locateSpan(null, [[0, 1]]), null)
   // 取第一个可用区间，坏形状跳过后继续。
   assert.deepEqual(locateSpan('abcdef', [[9, 8], [1, 3]]), { start: 1, end: 3 })
+})
+
+// #228/#234：被门控挡住的条数要说出来，否则"没下发"会被读成"没疑点"。
+test('gated notice separates "not released" from "nothing found"', () => {
+  assert.equal(gatedNotice(0), '', '0 条被挡住时不该出现任何文案')
+  assert.equal(gatedNotice(undefined), '')
+  assert.equal(gatedNotice(null), '')
+  assert.equal(gatedNotice(''), '')
+  assert.equal(gatedNotice(-3), '', '负数是后端 bug，不能显示成"另有 -3 处"')
+  assert.equal(gatedNotice('abc'), '')
+  const text = gatedNotice(2)
+  assert.match(text, /另有 2 处机器疑点暂未开放显示/)
+  assert.match(text, /不代表这条没有值得看的地方/)
+  assert.equal(gatedNotice(1.9), '本条另有 1 处机器疑点暂未开放显示（规则尚未放行，不代表这条没有值得看的地方）。',
+    '非整数要向下取整，不能显示 1.9 处')
 })

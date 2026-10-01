@@ -24,7 +24,7 @@
 | `severity` | select `info \| warn \| strong` | 是 | finding 自身属性，**不是规则档位** |
 | `message_key` | text | 是 | 措辞键，前端按 key 渲染中文（§4）。**它是规则身份的组成部分** |
 | `params_json` | text（JSON 字符串） | 是 | 措辞参数，只允许结构信息（码位、计数、列名），见 §6 |
-| `evidence_json` | text（JSON 字符串） | 否 | `{bbox?, char_offsets?, excerpt?, page?}`，形状由 #125 定义写入方 |
+| `evidence_json` | text（JSON 字符串） | 否 | `{bbox?, char_offsets?, excerpt?, page?, anchor?, partners?}`。`char_offsets` 是 `[[start, end), …]` 的**码位**半开区间，与消费端 `frontend/src/lib/fieldHints.js` 的 `locateSpan` 同口径（它再换算成 UTF-16 选区）。有格内命中位置的生产者必须带：R1 越界字符、R2 可混淆字符、R3 格级组合符、R6 长数字串，以及 `merged_columns` 两类；不带的是「空格里没有字符可标」的 R5，以及判据本身看不到单格的列级 R3/R4 与页级 R7 |
 | `producer` | select `rule \| ocr \| bundle_import` | 是 | 谁产的 |
 | `producer_version` | text | 是 | 规则/模型版本，升版即新批次 |
 | `produced_at` | date | 是 | 批次时间 |

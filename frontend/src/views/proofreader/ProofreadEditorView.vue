@@ -105,6 +105,9 @@
           <p v-if="findingsTruncated" class="field-hint-truncated text-sm text-muted" role="status">
             本条疑点数量超出单次读取上限，以上标注不完整，请勿以“无标记”当作已核对通过。
           </p>
+          <p v-if="gatedNoticeText" class="field-hint-gated text-sm text-muted" role="status">
+            {{ gatedNoticeText }}
+          </p>
 
           <div class="proofread-fields">
             <article
@@ -239,7 +242,8 @@ import {
   pageLevelOverflow,
   prepareFieldHints,
   hintsForField,
-  hintsOverflowFor
+  hintsOverflowFor,
+  gatedNotice
 } from '@/lib/fieldHints'
 import {
   clearTaskDraft,
@@ -294,6 +298,8 @@ const textareaRefs = new Map()
 // 冻结空结构：列表与高亮分支全部走 v-if=false，界面与今天像素级一致。
 const fieldHints = ref(prepareFieldHints([]))
 const findingsTruncated = ref(false)
+const findingsSuppressed = ref(0)
+const gatedNoticeText = computed(() => gatedNotice(findingsSuppressed.value))
 const locatedSpan = ref(null)
 let findingsGeneration = 0
 let draftTimer = null
@@ -438,6 +444,7 @@ async function loadPage() {
   textareaRefs.clear()
   fieldHints.value = prepareFieldHints([])
   findingsTruncated.value = false
+  findingsSuppressed.value = 0
   locatedSpan.value = null
   findingsGeneration += 1
 
@@ -582,6 +589,7 @@ async function loadFindings(pageId) {
   if (generation !== findingsGeneration || page.value?.id !== pageId) return
   fieldHints.value = prepareFieldHints(result.hints, rowHeaders.value)
   findingsTruncated.value = result.truncated
+  findingsSuppressed.value = result.suppressedByGate
 }
 
 async function restoreField(header) {

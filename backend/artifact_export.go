@@ -144,7 +144,7 @@ func (s *importService) exportCSV(c *core.RequestEvent) error {
 
 	pages, err := s.app.FindRecordsByFilter(
 		"pages",
-		fmt.Sprintf("project = %q", projectID),
+		fmt.Sprintf(`project = %q && status != "importing"`, projectID),
 		"page_number",
 		200000,
 		0,

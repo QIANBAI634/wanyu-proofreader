@@ -22,5 +22,7 @@
   { "suite": "source_registry_integration.mjs", "ci_matrix": true },
   { "suite": "column_roles_integration.mjs", "ci_matrix": true },
   { "suite": "gate_release_integration.mjs", "ci_matrix": true },
+  { "suite": "cross_source_integration.mjs", "ci_matrix": true },
+  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true },
   { "suite": "artifact_export_integration.mjs", "ci_matrix": true }
 ]
