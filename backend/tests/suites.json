@@ -23,5 +23,6 @@
   { "suite": "column_roles_integration.mjs", "ci_matrix": true },
   { "suite": "gate_release_integration.mjs", "ci_matrix": true },
   { "suite": "cross_source_integration.mjs", "ci_matrix": true },
-  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true }
+  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true },
+  { "suite": "assist_admin_integration.mjs", "ci_matrix": true }
 ]

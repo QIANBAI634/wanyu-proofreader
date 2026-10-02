@@ -88,7 +88,7 @@ await importCsv(project.id, `${HEADERS}\n人,lang2,别人,2\n`, 'b.csv', sourceB
 
 const identityRun = await api(`/api/fangji/projects/${project.id}/identity/recompute`, { method: 'POST', token })
 assert.ok(identityRun.findings >= 2, `两条条目应各产一条跨来源疑点，实得 ${JSON.stringify(identityRun)}`)
-assert.equal(identityRun.producer_version, 'identity-v2')
+assert.equal(identityRun.producer_version, 'identity-v3')
 // 两个来源都登记齐了，所以"来源不足"的计数必须是 0——它是最容易悄悄变绿的数字。
 assert.equal(identityRun.unattributed_groups, 0, JSON.stringify(identityRun))
 assert.equal(identityRun.difficulty_stale, true, '跨行检出不刷 tier，必须显式告诉调用方')
@@ -101,7 +101,7 @@ for (const item of cross) {
   assert.equal(item.severity, 'strong')
   assert.deepEqual(item.message.params.differs_on, ['释义'])
   assert.equal(item.message.params.sources.length, 2, '冲突来源集合要如实列出两个登记来源')
-  assert.equal(item.producer_version, 'identity-v2', '判据语义变更必须升版，否则新旧批次混在同一档位身份下')
+  assert.equal(item.producer_version, 'identity-v3', '判据语义变更必须升版，否则新旧批次混在同一档位身份下')
   assert.equal(item.evidence.anchor, 'entry')
   // 词头/记音/释义的字面值不许进 params（review-findings.md §8.1 按绝对解释执行）
   const serialized = JSON.stringify(item.message.params)
@@ -147,7 +147,53 @@ assert.equal(unknownItems.some((item) => item.kind === 'cross_source_conflict'),
 assert.ok(unknownItems.some((item) => item.kind === 'duplicate_identity'),
   JSON.stringify(unknownItems.map((i) => i.kind)))
 
-for (const projectId of [project.id, control.id, unknownSource.id]) {
+// ---------- #170 列角色：换正本（列名不是莆仙词表）时判据要跟着走 ----------
+// 这一节证的是**接线**，不是纯函数：identityColumns() 在 identity_integration.mjs 里已经能算，
+// 但如果 recomputeIdentity 不把项目的 column_roles_json 传进去，跨行检出对蒙古语正本就是
+// 一条都产不出来，而响应里只会显示"这一批很干净"。所以先跑未标角色的对照，再标角色跑第二遍，
+// 两次都断言 identity_column_source，让回退路径留在响应里可看见。
+const MONGO_HEADERS = '词,转写,含义,PDF页码'
+const mongoProject = await createProject(`跨来源角色夹具 ${suffix}`)
+await importCsv(mongoProject.id, `${MONGO_HEADERS}\nаа,aa,父亲,1\n`, 'm1.csv', sourceA.logical_id)
+await importCsv(mongoProject.id, `${MONGO_HEADERS}\nаа,aa,大叔,2\n`, 'm2.csv', sourceB.logical_id)
+
+const beforeRoles = await api(`/api/fangji/projects/${mongoProject.id}/identity/recompute`, { method: 'POST', token })
+assert.equal(beforeRoles.identity_column_source, 'hardcoded',
+  '未标列角色时必须显式暴露"用的是硬编码词表"')
+assert.equal(beforeRoles.unkeyed_rows, 2, JSON.stringify(beforeRoles))
+assert.equal(beforeRoles.findings, 0, `词表认不得的列名不该产疑点：${JSON.stringify(beforeRoles)}`)
+assert.equal((await findingsOf(mongoProject.id)).length, 0)
+
+await api(`/api/fangji/projects/${mongoProject.id}/column-roles`, {
+  method: 'PUT', token,
+  body: { roles: { 词: 'headword', 转写: 'reading', 含义: 'meaning' } }
+})
+const afterRoles = await api(`/api/fangji/projects/${mongoProject.id}/identity/recompute`, { method: 'POST', token })
+assert.equal(afterRoles.identity_column_source, 'roles', JSON.stringify(afterRoles))
+assert.equal(afterRoles.unkeyed_rows, 0, '标了角色后这些行必须真的进入比较')
+assert.ok(afterRoles.findings >= 2, JSON.stringify(afterRoles))
+assert.equal(afterRoles.uncomparable_groups, 0, `标齐了三段角色就不该有"没在比较"的组：${JSON.stringify(afterRoles)}`)
+const mongoItems = (await findingsOf(mongoProject.id)).filter((i) => i.kind === 'cross_source_conflict')
+assert.equal(mongoItems.length, 2, JSON.stringify((await findingsOf(mongoProject.id)).map((i) => i.kind)))
+for (const item of mongoItems) {
+  assert.deepEqual(item.message.params.differs_on, ['含义'],
+    '分歧列名来自角色，不能再是写死的「释义」')
+}
+
+// 再把角色退回到"只标词头与记音"：这一格走角色路径、可比列为空，于是同一条数据
+// 从"2 条跨来源冲突"掉到 0。0 本身不是错，错的是没人说得清它为什么是 0 ——
+// uncomparable_groups 必须报出"这一组根本没被比较"（#238 评审阻断 2 要求端到端可测）。
+await api(`/api/fangji/projects/${mongoProject.id}/column-roles`, {
+  method: 'PUT', token,
+  body: { roles: { 词: 'headword', 转写: 'reading' } }
+})
+const bareRun = await api(`/api/fangji/projects/${mongoProject.id}/identity/recompute`, { method: 'POST', token })
+assert.equal(bareRun.identity_column_source, 'roles', JSON.stringify(bareRun))
+assert.equal(bareRun.findings, 0, `可比列为空时不该凭空产疑点：${JSON.stringify(bareRun)}`)
+assert.equal(bareRun.uncomparable_groups, 1, JSON.stringify(bareRun))
+assert.equal(bareRun.unkeyed_rows, 0, '身份键仍然有效，所以这不是"没算出键"那一格')
+
+for (const projectId of [project.id, control.id, unknownSource.id, mongoProject.id]) {
   await api(`/api/collections/projects/records/${projectId}`, { method: 'DELETE', token: superAuth.token, status: 204 })
 }
 
