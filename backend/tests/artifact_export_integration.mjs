@@ -1,26 +1,6 @@
 import assert from 'node:assert/strict'
 import { toSafeCsvCell } from '../../frontend/src/lib/csvExport.js'
-
-// 内联 useStructuredRow.js 的 safeParseRowJson / orderedRowHeaders（逐字对齐）。
-// 不能直接 import 该文件：它顶部 `import { ref } from 'vue'`，而集成测试的
-// node 环境不装 vue（pocketbase-compatibility job 只 setup-node，不 npm install）。
-function safeParseRowJson(raw) {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-function orderedRowHeaders(page, row) {
-  let saved = []
-  try { saved = JSON.parse(page?.row_headers_json || '[]') } catch { /* corrupt saved order must not block */ }
-  const keys = Object.keys(row || {})
-  return [...new Set([...(Array.isArray(saved) ? saved.filter((key) => typeof key === 'string' && keys.includes(key)) : []), ...keys])]
-}
+import { safeParseRowJson, orderedRowHeaders } from '../../frontend/src/lib/structuredRow.js'
 
 const baseUrl = process.env.PB_URL || 'http://127.0.0.1:18095'
 const sample = '𢶀𠮷㙟𰻞䲠a̤̍o̤̍〔Ǿɑɡɔ∣‖①⑭■▲◆●﹑－―—～５〕ãăǎạa̩'

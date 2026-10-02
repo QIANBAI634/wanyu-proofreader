@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -130,6 +131,33 @@ func orderedRowHeaders(saved []string, rowObj *orderedObject) []string {
 	return result
 }
 
+// exportedRow 是导出的一行：页码 + 已按 status 选好数据源的保序行对象。
+type exportedRow struct {
+	pageNumber string
+	rowObj     *orderedObject
+}
+
+// buildCSVText 把表头与行拼成导出的 CSV 文本（BOM + CRLF）。
+// 抽成纯函数后，exportCSV 与测试共用同一份实现，测试不再自拼副本。
+func buildCSVText(finalHeaders []string, headers []string, rows []exportedRow) string {
+	lines := make([]string, 0, len(rows)+1)
+	headerCells := make([]string, len(finalHeaders))
+	for i, h := range finalHeaders {
+		headerCells[i] = toSafeCsvCell(h)
+	}
+	lines = append(lines, strings.Join(headerCells, ","))
+	for _, row := range rows {
+		cells := make([]string, len(finalHeaders))
+		cells[0] = toSafeCsvCell(row.pageNumber)
+		for i, h := range headers {
+			val, _ := row.rowObj.get(h)
+			cells[i+1] = toSafeCsvCell(val)
+		}
+		lines = append(lines, strings.Join(cells, ","))
+	}
+	return "\uFEFF" + strings.Join(lines, "\r\n")
+}
+
 func (s *importService) exportCSV(c *core.RequestEvent) error {
 	projectID := c.Request.PathValue("projectId")
 	auth, _, err := s.requireProjectManager(c, projectID)
@@ -157,10 +185,6 @@ func (s *importService) exportCSV(c *core.RequestEvent) error {
 	}
 
 	headers := []string{}
-	type exportedRow struct {
-		pageNumber string
-		rowObj     *orderedObject
-	}
 	rows := make([]exportedRow, 0, len(pages))
 	for _, page := range pages {
 		var rowObj *orderedObject
@@ -198,25 +222,16 @@ func (s *importService) exportCSV(c *core.RequestEvent) error {
 	}
 
 	finalHeaders := append([]string{"PDF页码"}, headers...)
-	lines := make([]string, 0, len(rows)+1)
-	headerCells := make([]string, len(finalHeaders))
-	for i, h := range finalHeaders {
-		headerCells[i] = toSafeCsvCell(h)
-	}
-	lines = append(lines, strings.Join(headerCells, ","))
-	for _, row := range rows {
-		cells := make([]string, len(finalHeaders))
-		cells[0] = toSafeCsvCell(row.pageNumber)
-		for i, h := range headers {
-			val, _ := row.rowObj.get(h)
-			cells[i+1] = toSafeCsvCell(val)
-		}
-		lines = append(lines, strings.Join(cells, ","))
-	}
-	csvText := "\uFEFF" + strings.Join(lines, "\r\n")
+	csvText := buildCSVText(finalHeaders, headers, rows)
 
 	safeName := regexp.MustCompile(`[\\/:*?"<>|]`).ReplaceAllString(project.GetString("name"), "_")
-	fileName := safeName + "_校对结果.csv"
+	const nameSuffix = "_校对结果.csv"
+	// project_artifacts.file_name 上限 500 码点（text max 按码点计）。项目名允许
+	// 正好 500 码点，截到 500 - 后缀长度，避免落库校验在用户看不到的地方失败。
+	if extra := utf8.RuneCountInString(safeName) + utf8.RuneCountInString(nameSuffix) - 500; extra > 0 {
+		safeName = truncateRunes(safeName, utf8.RuneCountInString(safeName)-extra)
+	}
+	fileName := safeName + nameSuffix
 
 	file, err := filesystem.NewFileFromBytes([]byte(csvText), fileName)
 	if err != nil {
@@ -238,6 +253,12 @@ func (s *importService) exportCSV(c *core.RequestEvent) error {
 	})
 	record.Set("file", file)
 	if err := form.Submit(); err != nil {
+		logUpload("error", "artifact_export_persist_failed", map[string]any{
+			"project_id":         projectID,
+			"file_name_rune_len": utf8.RuneCountInString(fileName),
+			"file_size":          len(csvText),
+			"error":              err.Error(),
+		})
 		return apis.NewBadRequestError("保存导出产物失败。", err)
 	}
 	return c.JSON(http.StatusCreated, record)
@@ -277,4 +298,21 @@ func containsStr(list []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// truncateRunes 按码点把 s 截到 n 个码点（不切断多字节字符）。
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	// 走到第 n 个码点之后的位置，返回其前缀。
+	i := 0
+	for range n {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return s[:i]
 }

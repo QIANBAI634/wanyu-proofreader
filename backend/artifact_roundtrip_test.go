@@ -34,14 +34,17 @@ func TestRareAndPlaceholderCharsSurviveExport(t *testing.T) {
 	}
 }
 
-// TestCSVTextAssembly 验证导出文本拼装：BOM 前缀 + CRLF 行分隔 + 表头并集顺序。
+// TestCSVTextAssembly 直接调用生产函数 buildCSVText，钉住 BOM 前缀、CRLF 行分隔
+// 与表头/行拼装（不再由测试自拼副本）。
 func TestCSVTextAssembly(t *testing.T) {
-	// 用手工数据复刻 exportCSV 的纯计算部分（不含 DB）。
-	lines := []string{
-		strings.Join([]string{toSafeCsvCell("PDF页码"), toSafeCsvCell("词条"), toSafeCsvCell("音读"), toSafeCsvCell("释义")}, ","),
-		strings.Join([]string{toSafeCsvCell("1"), toSafeCsvCell("徛"), toSafeCsvCell("kiā"), toSafeCsvCell("站、立")}, ","),
-	}
-	csvText := "\uFEFF" + strings.Join(lines, "\r\n")
+	row := &orderedObject{keys: []string{"词条", "音读", "释义"}, values: map[string]any{
+		"词条": "徛", "音读": "kiā", "释义": "站、立",
+	}}
+	rows := []exportedRow{{pageNumber: "1", rowObj: row}}
+	headers := []string{"词条", "音读", "释义"}
+	finalHeaders := []string{"PDF页码", "词条", "音读", "释义"}
+
+	csvText := buildCSVText(finalHeaders, headers, rows)
 
 	if !strings.HasPrefix(csvText, "\uFEFF") {
 		t.Fatal("missing BOM prefix")

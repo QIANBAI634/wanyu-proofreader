@@ -1,23 +1,7 @@
 import { ref } from 'vue'
+import { safeParseRowJson, orderedRowHeaders } from '../lib/structuredRow.js'
 
-export function safeParseRowJson(raw) {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-// JSON object enumeration reorders integer-like keys; keep CSV order explicitly.
-export function orderedRowHeaders(page, row) {
-  let saved = []
-  try { saved = JSON.parse(page?.row_headers_json || '[]') } catch { /* corrupt saved order must not block rendering; fall back to key order */ }
-  const keys = Object.keys(row || {})
-  return [...new Set([...(Array.isArray(saved) ? saved.filter(key => typeof key === 'string' && keys.includes(key)) : []), ...keys])]
-}
+export { safeParseRowJson, orderedRowHeaders }
 
 export function composeRowText(headers, rowObj) {
   return headers
