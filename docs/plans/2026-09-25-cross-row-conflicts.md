@@ -24,7 +24,11 @@ entry_identity_key = 归一化(词头) + " " + 归一化(记音)
   写入被 PocketBase 拒成 400，而且管理端根本没法肉眼读一个含 NUL 的分组键。
   归一化已经把两段里的空白全去掉了，所以空格分隔是无损、可反解的。
 - 词头取 `词条`，记音取 `拼音`/`莆田IPA`/`仙游IPA` 里第一个非空的。
-  **#170 落地后改成按列角色取**（与 #177 的 R5/R6 同一处债务），届时升 `IDENTITY_VERSION`。
+  **自 `identity-v3` 起改为按 #170 的列角色取**（`identityColumns(roles)`：词头=`headword`，
+  记音=`reading`，可比列=`meaning`/`region`/`example`/`note`，释义列=第一个 `meaning`）。
+  角色凑不齐「词头 + 记音」两段时**整份回退**上面这套莆仙词表，不半用角色半用词表——
+  不能因为管理员标漏一列就让判据失去能力。回退与否由响应字段 `identity_column_source`
+  （`roles` | `hardcoded`）说出口，不让它成为一个看不见的分叉。
 - 两段任一缺失 ⇒ **不产生键**（`null`）。宁可少算，也不要拿不完整的键把别的条目误合进来。
   这类条目计入 `unkeyed`，在汇总里可见，不是静默丢弃。
 
@@ -34,7 +38,7 @@ entry_identity_key = 归一化(词头) + " " + 归一化(记音)
 | --- | --- | --- | --- |
 | `duplicate_identity` | `same_identity_different_content` | strong | ✅ 已实现 |
 | `merged_columns`（规则生产者） | `multiple_headwords_in_cell` / `reading_inside_meaning_row` | strong / warn | ✅ 已实现 |
-| `cross_source_conflict` | `same_identity_across_sources` | strong | ✅ 已实现（identity-v2，依赖 #169） |
+| `cross_source_conflict` | `same_identity_across_sources` | strong | ✅ 已实现（identity-v3，依赖 #169） |
 
 `cross_source_conflict` 必须经 #169 的 `sources` 登记来源才能判。#169 已由 PR #224 合入，
 本支把链路接上：`pages.import_job → import_jobs.source`，回落 `projects.source`，两处都没关联
@@ -93,7 +97,7 @@ IDENTITY_KINDS = duplicate_identity, cross_source_conflict, merged_columns
 
 - **只在批处理路径跑**：跨行比较是 O(n) 起，绝不挂到提交路径（#178 正文明确要求）。
   入口是 `POST /api/fangji/projects/{id}/identity/recompute`（manager 专属，同步，返回
-  `pages / findings / unanchored / superseded / backfilled_keys / dismissed_groups / duration_ms`）。
+  `pages / findings / unanchored / superseded / backfilled_keys / dismissed_groups / compared_rows / unkeyed_rows / unattributed_groups / uncomparable_groups / identity_column_source / offsets_dropped / producer_version / difficulty_stale / duration_ms`）。
 - `unanchored` 与 #177 的项目级重算同形状：挂靠解析不出来就跳过并计数＋`console.warn`，绝不
   退化成"挂到第一条"。今天这条分支结构上不可达（anchor 取自与 `byId` 同一份 `entries`），
   留它只为了让两条批处理路径在"规则产了但写入端没接住"这件事上都留得下痕迹；**因此它没有
@@ -178,3 +182,19 @@ IDENTITY_KINDS = duplicate_identity, cross_source_conflict, merged_columns
 不合并、不删除（测试断言检出后 4 个条目都还在）、不做模糊匹配/编辑距离/向量相似度
 （纯字符归一化，无相似度代码）、不跨项目（分组带 `project`）、不裁决谁对
 （finding 只列出差在哪几列，不含建议值）、不写回任何值。
+
+## 9. 「来源」列与 #169 的登记来源不是一回事（v3 换口径时的判断）
+
+硬编码词表把 `来源` 当可比列，而 #170 的角色词表里**没有** `source` 这一档
+（`column_roles.js` 的 `ROLES` = headword/reading/meaning/region/example/note/unspecified）。
+于是采纳列角色之后，正本表里那一列 `来源` 不再参与比较——**这是一次信息量减少，不是等价重构**，
+写在这里以免下一个换正本的项目以为两件事可以互相推导：
+
+- 正本里的 `来源` 是**表内文字**（一行数据的一个字段），跟着词目走，通常是"引自某书某页"这类抄录信息；
+- #169 的登记来源是**材料层面的记录**（`pages.import_job → import_jobs.source`，回落 `projects.source`），
+  一条 import_job 对应一份可谈权利的材料，跨来源判据用的就是它。
+
+两者不同一层：同一份登记来源里可以有多种 `来源` 文字，反之同一列文字也可能来自多次导入。
+因此 v3 的取舍是"跨来源判据只用 #169 的 sources"，而不是把 `来源` 列硬塞进角色词表。
+以后若要让 `来源` 列继续参与比较，那是 #170 的枚举改动（同时动 `ROLES`、前端
+`FIELD_ROLES`/`FIELD_ROLE_LABELS`、`columnRoleSuggestion.js` 与本文档），不藏在任何判据支里顺手做。

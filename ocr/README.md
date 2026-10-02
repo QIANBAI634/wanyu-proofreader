@@ -92,4 +92,4 @@ python score.py --gold 标准答案.csv --test 待测结果.csv [--key 页码]
 
 ## 外部依赖
 
-- `extract_text.py` 依赖系统安装 `pdftotext`（poppler-utils）。未 vendoring，仅在 README 说明需系统安装。
+- `extract_text.py` 依赖系统安装 `pdftotext`（poppler-utils，GPL-2.0-or-later）。**未 vendoring**：不随仓库分发、不进入 `THIRD_PARTY_NOTICES.md`（该文件只登记 vendored 进 `frontend/public/**` 等路径的组件），仅在运行 `extract_text.py` 的机器上按需系统安装并加入 `PATH`。本仓库代码不链接、不封装 poppler 库，只以外部命令方式调用其可执行文件，因此不构成衍生作品，亦不影响本仓 AGPL 边界。
