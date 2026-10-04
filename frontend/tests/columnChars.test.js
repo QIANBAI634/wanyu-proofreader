@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  isHan, isIpa, isToneDigit, isCircledNumber,
+  isHan, isIpa, isLatin, isToneDigit, isCircledNumber,
+  isMeaningSeparator, isPlaceholderChar,
   charClass, readingSpans
 } from '../src/lib/columnChars.js'
 
@@ -47,4 +48,34 @@ test('readingSpans returns codepoint half-open intervals', () => {
   // '徛 kiā' → 读音段 'kiā' 在码位 [2,5)（徛=0，空格=1，k=2，i=3，ā=4）
   assert.deepEqual(readingSpans('徛 kiā'), [[2, 5]])
   assert.deepEqual(readingSpans('徛'), [])
+  // 多段读音
+  assert.deepEqual(readingSpans('徛 kiā 啊 a'), [[2, 5], [8, 9]])
+})
+
+test('isLatin covers accented latin', () => {
+  assert.equal(isLatin('a'), true)
+  assert.equal(isLatin('ā'), true) // Latin Extended-A
+  assert.equal(isLatin('ø'), true) // Latin-1 Supplement
+  assert.equal(isLatin('徛'), false)
+  assert.equal(isLatin(''), false)
+})
+
+test('isMeaningSeparator and isPlaceholderChar', () => {
+  assert.equal(isMeaningSeparator('：'), true)
+  assert.equal(isMeaningSeparator('‖'), true)
+  assert.equal(isMeaningSeparator('啊'), false)
+
+  const pua = String.fromCodePoint(0xE123)
+  const ids = String.fromCodePoint(0x2FF0)
+  assert.equal(isPlaceholderChar(pua), true)
+  assert.equal(isPlaceholderChar(ids), true)
+  assert.equal(isPlaceholderChar('徛'), false)
+})
+
+test('charClass treats placeholder as content (han)', () => {
+  const pua = String.fromCodePoint(0xE123)
+  const ids = String.fromCodePoint(0x2FF0)
+  assert.equal(charClass(pua), 'han')
+  assert.equal(charClass(ids), 'han')
+  assert.equal(charClass(pua + ' kiā'), 'mixed') // 集外字词头 + 音读合并
 })

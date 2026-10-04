@@ -79,6 +79,21 @@ export function isMeaningSeparator(ch) {
   return MEANING_SEPARATORS.has(ch)
 }
 
+// 集外字占位符：PUA(U+E000–U+F8FF) 与 IDS(U+2FF0–U+2FFF)。
+// 与 ocr/charset.py 的 ABSTAIN_RANGES 对齐——#123 用它们表示收不进 Unicode 的
+// 集外字。分列时它们属于「内容字符」（词头/释义里打不出的字），不是无意义的 other，
+// 否则纯 PUA 词头会被 charClass 判成 'other' 而错位。
+const PLACEHOLDER_RANGES = [
+  [0xe000, 0xf8ff], // Private Use Area
+  [0x2ff0, 0x2fff] // Ideographic Description Characters
+]
+
+export function isPlaceholderChar(ch) {
+  if (!ch) return false
+  const cp = ch.codePointAt(0)
+  return inRanges(cp, PLACEHOLDER_RANGES)
+}
+
 // ---- 主导类别 ----
 // 对一个单元格文本，统计其码点类别，返回主导类别：
 //   'han'      —— 主要是汉字（词头 / 释义的正文）
@@ -96,7 +111,8 @@ export function charClass(text) {
       // 分隔符/义项序号是「释义」的结构标记，不偏向读音。
       continue
     }
-    if (isHan(ch)) { han += 1; continue }
+    // 集外字占位符（PUA/IDS）是打不出的「内容字符」，归入词头/释义类，避免错位。
+    if (isHan(ch) || isPlaceholderChar(ch)) { han += 1; continue }
     if (isIpa(ch) || isLatin(ch) || isToneDigit(ch)) { reading += 1; continue }
   }
 

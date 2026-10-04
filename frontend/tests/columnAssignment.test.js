@@ -81,3 +81,45 @@ test('char_offsets are consumable by fieldHints.locateSpan', () => {
   // '徛 kiā'：码位 [2,5) 对应 UTF-16 也是 [2,5)（无补充平面字符）
   assert.deepEqual(span, { start: 2, end: 5 })
 })
+
+test('placeholder (PUA/IDS) headword is assigned to headword column', () => {
+  const pua = String.fromCodePoint(0xE123)
+  const ids = String.fromCodePoint(0x2FF0)
+  const row1 = assignRow(['词头', '音读', '释义'], [pua, 'kiā', '站'])
+  assert.equal(row1.词头, pua)
+  assert.equal(row1.音读, 'kiā')
+  assert.equal(row1.释义, '站')
+
+  const row2 = assignRow(['词头', '音读', '释义'], [ids, 'kiā', '站'])
+  assert.equal(row2.词头, ids)
+})
+
+test('rare CJK extension headword is preserved unchanged', () => {
+  // 静默替换率 = 0：分列不改字，生僻字原样保留
+  const row = assignRow(['词头', '释义'], ['𢶀', '生僻字释义'])
+  assert.equal(row.词头, '𢶀')
+  assert.equal(row.释义, '生僻字释义')
+})
+
+test('missing cells leave trailing columns unassigned', () => {
+  const result = assignColumns(['词头', '音读', '释义'], ['徛', 'kiā'])
+  assert.equal(result[0].assignedHeader, '词头')
+  assert.equal(result[1].assignedHeader, '音读')
+  assert.equal(result.length, 2)
+})
+
+test('extra cells keep empty assignedHeader', () => {
+  const result = assignColumns(['词头', '音读', '释义'], ['徛', 'kiā', '站', '多余'])
+  assert.equal(result[3].assignedHeader, '')
+})
+
+test('empty headers or cells do not throw', () => {
+  assert.deepEqual(assignColumns([], ['徛']), [{ cellIndex: 0, assignedHeader: '', merged: false, charOffsets: undefined }])
+  assert.deepEqual(assignColumns(['词头'], []), [])
+})
+
+test('assignColumns is a pure function (deterministic)', () => {
+  const a = assignColumns(['词头', '音读', '释义'], ['徛', 'kiā', '站'])
+  const b = assignColumns(['词头', '音读', '释义'], ['徛', 'kiā', '站'])
+  assert.deepEqual(a, b)
+})
