@@ -30,5 +30,6 @@
   { "suite": "assist_admin_integration.mjs", "ci_matrix": true },
   { "suite": "artifact_export_integration.mjs", "ci_matrix": true },
   { "suite": "quality_state_integration.mjs", "ci_matrix": true },
-  { "suite": "quality_state_browser_integration.mjs", "ci_matrix": false, "requires_env": "QUALITY_BROWSER_SCRIPT", "note": "需要 playwright 与已构建的 frontend/dist；截图由 quality-state-browser 作业产出" }
+  { "suite": "quality_state_browser_integration.mjs", "ci_matrix": false, "requires_env": "QUALITY_BROWSER_SCRIPT", "note": "需要 playwright 与已构建的 frontend/dist；截图由 quality-state-browser 作业产出" },
+  { "suite": "page_content_integration.mjs", "ci_matrix": true }
 ]

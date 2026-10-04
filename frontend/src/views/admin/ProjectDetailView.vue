@@ -403,14 +403,23 @@
                   {{ Array.from(pg.ocr_text || '').slice(0, 80).join('') || '—' }}
                 </td>
                 <td>
-                  <RouterLink
-                    v-if="pg.status === PAGE_STATUS.ARBITRATION"
-                    :to="`/admin/projects/${projectId}/arbitration/${pg.id}`"
-                    class="btn btn-warn btn-sm"
-                  >
-                    仲裁
-                  </RouterLink>
-                  <span v-else class="text-muted">—</span>
+                  <div class="flex gap-2">
+                    <RouterLink
+                      v-if="pg.status === PAGE_STATUS.ARBITRATION"
+                      :to="`/admin/projects/${projectId}/arbitration/${pg.id}`"
+                      class="btn btn-warn btn-sm"
+                    >
+                      仲裁
+                    </RouterLink>
+                    <button
+                      type="button"
+                      class="btn btn-quiet btn-sm"
+                      :disabled="mutatingRows"
+                      @click="openContentEdit(pg)"
+                    >
+                      修正
+                    </button>
+                  </div>
                 </td>
                 <td>
                   <div class="flex gap-2">
@@ -623,6 +632,14 @@
         </button>
       </template>
     </AppModal>
+
+    <PageContentEditModal
+      :open="Boolean(contentEditTarget)"
+      :page="contentEditTarget"
+      :project-id="projectId"
+      @close="contentEditTarget = null"
+      @saved="onContentSaved"
+    />
   </main>
 </template>
 
@@ -687,6 +704,7 @@ import {
   qualityStateSummaryRows
 } from '@/lib/qualityState'
 import AppModal from '@/components/AppModal.vue'
+import PageContentEditModal from '@/components/admin/PageContentEditModal.vue'
 import { getPbMessage, getPbStatus, getUploadErrorMessage, isRetryablePdfUploadError } from '@/utils/pbErrors'
 
 const route = useRoute()
@@ -907,6 +925,16 @@ function openQualityDialog(page) {
 function closeQualityDialog() {
   qualityTarget.value = null
   qualitySubmitting.value = false
+}
+
+const contentEditTarget = ref(null)
+function openContentEdit(page) {
+  contentEditTarget.value = page
+}
+
+async function onContentSaved(pageId) {
+  mutationSuccess.value = `第 ${contentEditTarget.value?.page_number ?? ''} 条已修正。`
+  await loadPages()
 }
 
 async function submitQualityChange() {

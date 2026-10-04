@@ -93,18 +93,6 @@ export async function getProofreaderTask(pageId) {
   })
 }
 
-export async function updatePage(pageId, data) {
-  return pb.collection('pages').update(pageId, data, { requestKey: null })
-}
-
-export async function createPage(data) {
-  return pb.collection('pages').create(data, { requestKey: null })
-}
-
-export async function deletePage(pageId) {
-  return pb.collection('pages').delete(pageId, { requestKey: null })
-}
-
 export async function reorderPendingPages(projectId, orderedIds) {
   return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/pages/reorder`, {
     method: 'POST',
@@ -117,6 +105,16 @@ export async function deletePendingPages(projectId, ids) {
   return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/pages/delete-pending`, {
     method: 'POST',
     body: { ids },
+    requestKey: null
+  })
+}
+
+// #124：管理员修正「识别产出」（导入原文）内容。
+// expectedUpdated 用于乐观锁，服务端比对不符返回 409。
+export async function updatePageContent(projectId, pageId, { rowJson, text, headersJson, expectedUpdated }) {
+  return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/pages/${encodeURIComponent(pageId)}/content`, {
+    method: 'POST',
+    body: { rowJson, text, headersJson, expectedUpdated },
     requestKey: null
   })
 }
