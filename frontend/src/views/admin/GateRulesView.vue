@@ -39,7 +39,7 @@
         <div v-else class="table-wrapper">
           <table>
             <thead>
-              <tr><th>规则</th><th>档位</th><th>证据</th><th>批准 / 变更集</th><th>操作</th></tr>
+              <tr><th>规则</th><th>档位</th><th>打分通道</th><th>证据</th><th>批准 / 变更集</th><th>操作</th></tr>
             </thead>
             <tbody>
               <tr v-for="item in items" :key="ruleKey(item)">
@@ -50,6 +50,7 @@
                 <td><span :class="gateBadgeClass(item.gate)">{{ gateLabel(item.gate) }}</span>
                   <div v-if="item.revoked_at" class="text-sm text-muted">已撤销 {{ item.revoked_at }}</div>
                 </td>
+                <td><span :class="channelBadgeClass(item.scoring_channel)">{{ channelLabel(item.scoring_channel) }}</span></td>
                 <td>{{ evidenceText(item) }}<div class="text-sm text-muted">{{ item.evaluated_at || '未记评估时间' }}</div></td>
                 <td>
                   <div class="text-sm">{{ item.approved_by || '未记批准人' }}</div>
@@ -141,6 +142,8 @@ import { RouterLink } from 'vue-router'
 import {
   evidenceText,
   gateBadgeClass,
+  channelBadgeClass,
+  channelLabel,
   gateLabel,
   readChangeset,
   summariseApply

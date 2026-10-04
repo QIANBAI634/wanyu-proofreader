@@ -280,6 +280,87 @@ assert.equal(flooded.gate_rows_truncated, true, '超过 MAX_GATE_ROWS 必须返�
 const floodedManager = await api(`/api/fangji/projects/${project.id}/findings`, { token })
 assert.equal(floodedManager.gate_rows_truncated, true, '统计口共用同一个上限与同一个信号')
 
+// 门控表读取口也必须带通道（#254 第 3 件事的另一半：`/admin/gate-rules` 以前只有
+// 档位与样本数，"等证据"与"永远拿不到"在两栏数字上长得一模一样）。
+const gateTable = await api('/api/fangji/gates', { token })
+assert.ok(gateTable.items.length >= 1, JSON.stringify(gateTable))
+for (const row of gateTable.items) {
+  assert.ok(['scored', 'unscored', 'unknown'].includes(row.scoring_channel),
+    `门控表读到的通道不可判定：${JSON.stringify([row.kind, row.message_key, row.scoring_channel])}`)
+}
+const noChannelRow = await api('/api/collections/assist_rule_gates/records', {
+  method: 'POST', token: superAuth.token,
+  body: {
+    producer: 'rule', producer_version: 'identity-v3', kind: 'merged_columns',
+    message_key: 'multiple_headwords_in_cell', gate: 'off', sample_n: 0, precision_hat: null,
+    evaluated_at: new Date().toISOString().slice(0, 10)
+  }
+})
+gateIds.push(noChannelRow.id)
+const gateTableAfter = await api('/api/fangji/gates', { token })
+const mergedRow = gateTableAfter.items.find((row) => row.kind === 'merged_columns')
+assert.equal(mergedRow?.scoring_channel, 'unscored', JSON.stringify(mergedRow))
+assert.ok(gateTableAfter.items.some((row) => row.scoring_channel === 'scored'),
+  '表里一条"可打分"都没有：这组断言退化成只看一种')
+
+// ---------- #254：判据"能不能拿到精度"必须一处定义、漏归类要红 ----------
+const { createRequire } = await import('node:module')
+const nodeRequire = createRequire(import.meta.url)
+const rulesLib = nodeRequire('../pb_hooks/lib/assist_rules.js')
+const coverage = nodeRequire('../pb_hooks/lib/rule_coverage.js')
+const { buildChangeset } = await import('../../scripts/assist/gate_changeset.mjs')
+
+// 规则引擎自己声明的 key 划分（CELL + PROJECT_ONLY）与通道表必须**双向相等**。
+// 只判单向包含会放过"表上登记了却根本不产出的判据"，那正是这份表要消灭的另一种沉默。
+const keysForVersion = (list) => [...new Set(list.filter((e) => e.producer_version === rulesLib.RULES_VERSION)
+  .map((e) => e.message_key))].sort()
+const engineMessageKeys = [...new Set([
+  ...rulesLib.CELL_MESSAGE_KEYS, ...rulesLib.PROJECT_ONLY_MESSAGE_KEYS
+])].sort()
+assert.deepEqual(keysForVersion([...coverage.SCORED, ...coverage.UNSCORED]), engineMessageKeys,
+  '通道表与规则引擎的 key 划分不一致')
+
+// 反证：断言必须能失败。从表里抽掉一条已登记的无通道判据，上面那条相等就必须红——
+// 否则"漏归类就红"这句承诺是恒真的。
+const droppedOne = coverage.UNSCORED.filter((e) => e.message_key !== 'mixed_normalization_forms')
+assert.notDeepEqual(keysForVersion([...coverage.SCORED, ...droppedOne]), engineMessageKeys,
+  '删掉一条归类后断言仍然成立：这条门禁是恒真的')
+
+// merged_columns 这一族是 #254 报的那件事：在产、却两栏都不提。
+assert.ok(coverage.UNSCORED.some((e) => e.kind === 'merged_columns' && e.reason),
+  'merged_columns 没有被点名为无通道')
+assert.equal(coverage.channelOf({ producer_version: rulesLib.RULES_VERSION, kind: 'missing_field', message_key: 'required_role_field_empty' }), 'scored')
+assert.equal(coverage.channelOf({ producer_version: 'no-such-version', kind: 'x', message_key: 'y' }), 'unknown')
+
+const allScored = coverage.SCORED.map((e) => ({
+  rule: e.rule, kind: e.kind, message_key: e.message_key,
+  hits: 200, precision: 0.95, gate: { gate: 'warn', basis: '反证用', note: '' }, wilson: { lower: 0.9, upper: 0.98 }
+}))
+const meta = { approvedBy: 'suite@example.com', approvedAt: '2026-10-02T00:00:00.000Z', producerVersion: rulesLib.RULES_VERSION, changesetId: 'cs-suite-coverage' }
+const full = buildChangeset({ scored: allScored, scope_roles: true }, meta)
+assert.equal(full.entries.length, coverage.SCORED.length)
+assert.equal(full.no_channel.length, coverage.UNSCORED.length)
+assert.ok(full.no_channel.some((e) => e.kind === 'merged_columns'))
+// 少一条在作用域内的可打分判据 → 必须红，而不是安静地少一栏。
+assert.throws(() => buildChangeset({ scored: allScored.slice(1), scope_roles: true }, meta), /漏了/)
+// 没给列角色时 R5 不在作用域内，缺它不该红（否则这条门禁会在真实用法上误报）。
+assert.doesNotThrow(() => buildChangeset(
+  { scored: allScored.filter((e) => e.message_key !== 'required_role_field_empty'), scope_roles: false }, meta))
+assert.throws(() => buildChangeset({ scored: allScored }, meta), /scope_roles/)
+
+// 管理端读取口必须真的把通道带出来（这条同时验 goja 侧的 `${__hooks}` 相对加载）。
+const channelView = await api(`/api/fangji/projects/${project.id}/findings?per=200`, { token })
+assert.ok(channelView.items.length >= 1, '统计口没有可读的疑点')
+for (const item of channelView.items) {
+  assert.ok(['scored', 'unscored', 'unknown'].includes(item.scoring_channel),
+    `管理端读到的通道值不可判定：${JSON.stringify([item.kind, item.message.key, item.scoring_channel])}`)
+}
+const hintPayload = await api(`/api/fangji/pages/${target.id}/findings`, { token: readerAuth.token })
+for (const hint of hintPayload.hints) {
+  // 校对端不下发通道：档位与"能不能打分"都是放行侧的事，下发过去只会被当置信度读。
+  assert.equal('scoring_channel' in hint, false, '校对端读到了通道字段')
+}
+
 for (const id of gateIds.filter(Boolean)) {
   await api(`/api/collections/assist_rule_gates/records/${id}`, { method: 'DELETE', token: superAuth.token, status: 204 })
 }

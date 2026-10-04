@@ -178,26 +178,27 @@
     <template #keyboard><ProjectKeyboard v-if="casePage" :project-id="casePage.project" @availability="keyboardAvailable = $event" @insert="insertText" /></template>
   </DocumentReviewWorkspace>
 
-  <div v-if="reviewingSubmission" class="modal-backdrop" role="presentation" @click.self="closeSubmitReview">
-    <section class="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="arbitration-review-title" @keydown.esc="closeSubmitReview">
-      <div class="confirmation-dialog__mark" aria-hidden="true">裁</div>
-      <div>
-        <div class="page-eyebrow">最终确认</div>
-        <h2 id="arbitration-review-title">完成第 {{ casePage?.page_number }} 条仲裁？</h2>
-        <p>已确认 {{ differingHeaders.length }} 个差异字段，其中 {{ sourceCount('custom') }} 个经过手工编辑。</p>
-        <p class="text-sm text-muted">提交后条目进入“校对完成”，该操作不能在当前界面撤回。</p>
-      </div>
-      <div class="confirmation-dialog__actions">
-        <button type="button" class="btn btn-secondary" @click="closeSubmitReview">继续检查</button>
-        <button ref="submitConfirmButton" type="button" class="btn btn-success" :disabled="submitting" @click="submitFinal">
-          {{ submitting ? '正在保存…' : '确认完成仲裁' }}
-        </button>
-      </div>
-    </section>
-  </div>
+  <AppModal
+    :open="reviewingSubmission"
+    title-id="arbitration-review-title"
+    mark="裁"
+    @close="closeSubmitReview"
+  >
+    <div class="page-eyebrow">最终确认</div>
+    <h2 id="arbitration-review-title">完成第 {{ casePage?.page_number }} 条仲裁？</h2>
+    <p>已确认 {{ differingHeaders.length }} 个差异字段，其中 {{ sourceCount('custom') }} 个经过手工编辑。</p>
+    <p class="text-sm text-muted">提交后条目进入“校对完成”，该操作不能在当前界面撤回。</p>
+    <template #actions>
+      <button type="button" class="btn btn-secondary" @click="closeSubmitReview">继续检查</button>
+      <button autofocus type="button" class="btn btn-success" :disabled="submitting" @click="submitFinal">
+        {{ submitting ? '正在保存…' : '确认完成仲裁' }}
+      </button>
+    </template>
+  </AppModal>
 </template>
 
 <script setup>
+import AppModal from '@/components/AppModal.vue'
 import RareCharacterNotice from '@/components/editor/RareCharacterNotice.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
@@ -222,7 +223,6 @@ const submitting = ref(false)
 const submitError = ref('')
 const submitted = ref(false)
 const reviewingSubmission = ref(false)
-const submitConfirmButton = ref(null)
 const showAllFields = ref(false)
 const caseData = ref(null)
 const attemptRows = ref([])
@@ -404,7 +404,7 @@ async function insertText(text) {
   fieldSelections.set(header, { ...activeSelection.value })
 }
 
-async function openSubmitReview() {
+function openSubmitReview() {
   if (mobile.value && !overview.value) { overview.value = true; return }
   if (unresolvedHeaders.value.length || submitting.value) {
     submitError.value = unresolvedHeaders.value.length
@@ -414,8 +414,6 @@ async function openSubmitReview() {
   }
   submitError.value = ''
   reviewingSubmission.value = true
-  await nextTick()
-  submitConfirmButton.value?.focus()
 }
 
 function closeSubmitReview() {

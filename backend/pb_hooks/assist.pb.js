@@ -115,6 +115,43 @@ routerAdd("POST", "/api/fangji/projects/{projectId}/dismissals", (c) => {
   return c.json(200, { id: record.id, existed: false })
 }, $apis.requireAuth("users"))
 
+// GET /api/fangji/projects/{projectId}/dismissals
+// #234：人工结论此前**只写不读**——集合的 listRule/viewRule 是 null（故意的，见
+// 1789113800_entry_identity.js:20-21），也没有任何 GET 路由，所以管理员标过 not_conflict
+// 的分组在界面上完全不可见，更别提撤回。读取一律走这个 manager 专属路由，集合规则保持 null。
+// 路径写字面量而不是 `${FANGJI_API}`：那个 const 声明在 proofreading.pb.js 顶层，而本文件
+// 按字母序在它之前求值，引用会直接 TDZ panic（本文件开头的警告就是这一件事）。
+routerAdd("GET", "/api/fangji/projects/{projectId}/dismissals", (c) => {
+  const { assertId: proofAssertId, requireManager: proofRequireManager } = require(`${__hooks}/lib/project_access.js`)
+  const auth = c.auth
+  if (auth.getBool("must_change_password")) throw new ForbiddenError("首次登录请先修改密码")
+  const projectId = proofAssertId(c.request.pathValue("projectId"), "项目")
+  proofRequireManager($app, projectId, auth)
+  const limit = 200
+  const rows = $app.findRecordsByFilter("finding_dismissals", `project = "${projectId}"`, "-created", limit + 1, 0)
+  const items = rows.slice(0, limit).map((record) => {
+    const deciderId = record.getString("decided_by")
+    let deciderName = ""
+    try {
+      deciderName = $app.findRecordById("users", deciderId).getString("name")
+    } catch {
+      // 用户被删掉时结论仍然有效（它是人工判断，不跟着人一起消失），只是没有署名。
+      deciderName = ""
+    }
+    return {
+      id: record.id,
+      group_key: record.getString("group_key"),
+      kind: record.getString("kind"),
+      status: record.getString("status"),
+      note: record.getString("note"),
+      decided_by: deciderId,
+      decided_by_name: deciderName,
+      created: record.getString("created")
+    }
+  })
+  return c.json(200, { items, truncated: rows.length > limit, limit })
+}, $apis.requireAuth("users"))
+
 // DELETE /api/fangji/projects/{projectId}/dismissals/{dismissalId}
 // 撤回人工结论要显式做（而不是悄悄覆盖）。撤回是**物理删除、不留痕**：#178 只要求
 // 「人工结论在重算时保留」，没有规定撤销要可审计，`status` 因此只有 not_conflict 一个值。

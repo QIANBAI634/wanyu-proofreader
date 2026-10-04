@@ -21,13 +21,22 @@ export function tierBreakdown(queue) {
     .map((key) => ({ key, label: TIER_LABELS[key], count: count(tiers[key]) }))
     .filter((option) => option.count > 0)
   if (!options.length) return null
+  const unknownCount = count(tiers.other)
+  const unlabeledCount = count(tiers.unlabeled)
+  const claimable = count(queue.claimable)
+  // #247：对不上账不许静默。可筛 + unknown + 未评估 应当等于 claimable，
+  // 少的那部分意味着有条目既没进任何一档、也没进"没算过"——正是分层数字虚高的形态。
+  // 多出来（负数）同样是异常（同一页被数了两次），所以原样给出去，由渲染端说成一句话。
+  const residual = claimable - options.reduce((total, option) => total + option.count, 0)
+    - unknownCount - unlabeledCount
   return {
     options,
     // "other" 就是算过但落 unknown 的那些；它与 unlabeled 都不进可筛选项，
     // 但要在概况里出现，否则用户会发现分层数字加起来对不上。
-    unknownCount: count(tiers.other),
-    unlabeledCount: count(tiers.unlabeled),
-    claimable: count(queue.claimable)
+    unknownCount,
+    unlabeledCount,
+    claimable,
+    residual
   }
 }
 

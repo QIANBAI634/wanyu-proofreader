@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "captured_from": "e044f69 (upstream/main, 2026-10-04)",
+  "reason": "Initial warning-only inventory for #264. Token declarations are excluded; count semantics are documented in CONTRIBUTING.md.",
+  "kinds": {
+    "hardcoded_colors": {
+      "limit": 145,
+      "mode": "warn"
+    },
+    "border_radius_literals": {
+      "limit": 15,
+      "mode": "warn"
+    },
+    "z_index_literals": {
+      "limit": 8,
+      "mode": "warn"
+    },
+    "inline_styles": {
+      "limit": 27,
+      "mode": "warn"
+    },
+    "bare_tables": {
+      "limit": 10,
+      "mode": "warn"
+    },
+    "alerts_without_role": {
+      "limit": 30,
+      "mode": "warn"
+    },
+    "custom_modals": {
+      "limit": 1,
+      "mode": "warn"
+    },
+    "undefined_variables": {
+      "limit": 1,
+      "mode": "warn"
+    },
+    "font_family_stacks": {
+      "limit": 20,
+      "mode": "warn"
+    }
+  }
+}

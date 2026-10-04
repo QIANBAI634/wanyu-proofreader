@@ -313,6 +313,79 @@ const row = (o) => ({ 词条: o.headword ?? '', 拼音: o.pinyin ?? '', 莆田IP
   assert.equal(sameSource.unattributed_groups, 1)
 }
 
+// #170 列角色驱动的判据：换正本（蒙古语列名）时不能再靠莆仙词表。
+{
+  const mongoRoles = { 词: 'headword', 转写: 'reading', 含义: 'meaning', 地区: 'region' }
+  const cols = identity.identityColumns(mongoRoles)
+  assert.equal(cols.source, 'roles')
+  assert.deepEqual(cols.headword, ['词'])
+  assert.deepEqual(cols.reading, ['转写'])
+  assert.ok(cols.comparable.includes('含义') && cols.comparable.includes('地区'))
+  assert.equal(cols.meaningField, '含义')
+
+  const mongoRow = (o) => ({ 词: o.h, 转写: o.r, 含义: o.m, 地区: o.g ?? '' })
+  // 词表里一个列名都不存在 ⇒ 不接角色时这批是"静默全干净"，接了角色才有键
+  assert.equal(identity.entryIdentityKey(mongoRow({ h: 'аа', r: 'aa', m: '父亲' })), null,
+    '硬编码词表不该认得蒙古语列名')
+  assert.equal(identity.entryIdentityKey(mongoRow({ h: 'аа', r: 'aa', m: '父亲' }), cols), 'аа aa')
+
+  const out = identity.findIdentityConflicts([
+    { id: 'M1', project: 'p', source: 'src-1', row: mongoRow({ h: 'аа', r: 'aa', m: '父亲', g: '牧区' }) },
+    { id: 'M2', project: 'p', source: 'src-2', row: mongoRow({ h: 'аа', r: 'aa', m: '大叔', g: '农区' }) }
+  ], new Set(), cols)
+  assert.equal(out.findings.length, 2, JSON.stringify(out))
+  assert.equal(out.findings[0].kind, 'cross_source_conflict')
+  assert.equal(out.findings[0].field, '含义', '释义列由角色决定，不能再写死「释义」')
+  assert.equal(out.unkeyed, 0, '接上角色后这批必须真的在比较，而不是 0 组')
+
+  // 角色凑不齐"词头+记音"⇒ 整份回退词表，绝不半用角色半用词表
+  const partial = identity.identityColumns({ 词: 'headword', 含义: 'meaning' })
+  assert.equal(partial.source, 'hardcoded')
+  assert.deepEqual(partial.headword, ['词条'])
+  assert.deepEqual(identity.identityColumns({}), identity.identityColumns(null))
+  // 莆仙正本即使只标了词头，今天照样能算 —— 回退路径不许变差
+  const stillWorks = identity.findIdentityConflicts([
+    { id: 'P1', project: 'p', row: row({ headword: '人', pinyin: 'lang2', meaning: '甲' }) },
+    { id: 'P2', project: 'p', row: row({ headword: '人', pinyin: 'lang2', meaning: '乙' }) }
+  ], new Set(), partial)
+  assert.equal(stillWorks.findings.length, 2)
+
+  // 没标 meaning 角色时不猜释义列：猜错会造出不存在的疑点
+  const noMeaning = identity.identityColumns({ 词: 'headword', 转写: 'reading' })
+  assert.equal(noMeaning.meaningField, null)
+  assert.deepEqual(identity.findRowShapeAnomalies(
+    { id: 'N1', row: { 词: 'аа', 转写: 'aa', 备注: 'ka53 之类' } }, noMeaning
+  ), [], '没有 meaning 角色就不能拿别的列凑数')
+  // 只标词头与记音（含义/地区都留着 unspecified）是最自然的中间状态：这一格走角色路径，
+  // 但可比列为空 ⇒ 每一组都在「没有可比列」处被跳过。它必须被计数说出来，
+  // 否则"没在比较"和"真的干净"在响应里长得一模一样（#238 评审阻断 2）。
+  const bareRoles = identity.identityColumns({ 词: 'headword', 转写: 'reading' })
+  assert.equal(bareRoles.source, 'roles')
+  assert.deepEqual(bareRoles.comparable, [], 'meaning/region/example/note 都没标时可比列应为空')
+  const bare = (id, meaning, source) => ({ id, project: 'p', source, row: { 词: 'аа', 转写: 'aa', 含义: meaning } })
+  const bareOut = identity.findIdentityConflicts(
+    [bare('u1', '父亲', 's1'), bare('u2', '大叔', 's2')], new Set(), bareRoles)
+  assert.equal(bareOut.findings.length, 0)
+  assert.equal(bareOut.compared, 0, '没在比较就不许记成"比较过"')
+  assert.equal(bareOut.uncomparable_groups, 1,
+    `可比列为空必须是可见计数：${JSON.stringify(bareOut)}`)
+  // 反向：可比列**配上了**且两行取值一致 ⇒ 这是干净的组，一条都不许计。
+  // 早先的 `!others.length` 把这种组也算进 uncomparable_groups，于是"整整齐齐没有分歧"
+  // 在响应里长得像"根本没在比较"，方向反了。
+  const same = (id) => ({ id, project: 'p', source: 's1', row: { 词: '人', 转写: 'lang2', 含义: '同义' } })
+  const cleanOut = identity.findIdentityConflicts([same('w1'), same('w2')], new Set(),
+    identity.identityColumns({ 词: 'headword', 转写: 'reading', 含义: 'meaning' }))
+  assert.deepEqual(cleanOut.findings, [], JSON.stringify(cleanOut))
+  assert.equal(cleanOut.uncomparable_groups, 0,
+    `已比较且取值一致的组不该计入"没在比较"：${JSON.stringify(cleanOut)}`)
+  assert.equal(cleanOut.groups, 1, '分组仍然成立：这一组被看见了、只是干净，而不是没被比较')
+
+  // 同一个配置若退回词表（角色没凑齐两段），可比列非空、照常产出疑点 —— 两格行为不同，都要钉住
+  const backToHardcoded = identity.identityColumns({ 词: 'headword' })
+  assert.equal(backToHardcoded.source, 'hardcoded')
+  assert.ok(backToHardcoded.comparable.includes('释义'))
+}
+
 // 规模：10k 行的纯分组扫描必须是线性量级（防止退化成分组内两两比较）。
 {
   const entries = []

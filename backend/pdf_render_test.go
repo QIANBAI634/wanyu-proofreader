@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,11 +58,11 @@ func TestTaskPDFRenderingFixture(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		count, err := pdfapi.PageCount(bytes.NewReader(data), nil)
+		count, err := pdfapi.PageCount(context.Background(), bytes.NewReader(data), nil)
 		if err != nil || count != end-start+1 {
 			t.Fatalf("pages=%d err=%v", count, err)
 		}
-		marked, err := pdfapi.HasWatermarks(bytes.NewReader(data), nil)
+		marked, err := pdfapi.HasWatermarks(context.Background(), bytes.NewReader(data), nil)
 		if err != nil || !marked {
 			t.Fatalf("watermark=%v err=%v", marked, err)
 		}
@@ -115,11 +116,11 @@ func TestTaskPDFBrowserRegression(t *testing.T) {
 		if err != nil {
 			t.Fatalf("page %d: %v", start, err)
 		}
-		actual, err := pdfapi.PageCount(bytes.NewReader(output), nil)
+		actual, err := pdfapi.PageCount(context.Background(), bytes.NewReader(output), nil)
 		if err != nil || actual != end-start+1 {
 			t.Fatalf("page %d: count=%d err=%v", start, actual, err)
 		}
-		marked, err := pdfapi.HasWatermarks(bytes.NewReader(output), nil)
+		marked, err := pdfapi.HasWatermarks(context.Background(), bytes.NewReader(output), nil)
 		if err != nil || !marked {
 			t.Fatalf("page %d: watermark=%v err=%v", start, marked, err)
 		}

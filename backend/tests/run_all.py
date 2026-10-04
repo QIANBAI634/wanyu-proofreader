@@ -14,6 +14,7 @@ Usage:
 """
 import argparse
 import concurrent.futures
+import os
 import sys
 import time
 
@@ -37,6 +38,12 @@ def select(registry, filters):
         suite = entry['suite']
         if entry.get('ci_runner'):
             print(f'skip {suite}: {entry["ci_runner"]} restarts the server to re-verify persistence')
+            continue
+        # 这类套件缺环境时会自己打印 SKIP 并退出 0。让它进正常通道就会被汇总成
+        # "PASS assist_browser_integration.mjs (795 ms)"——一次什么都没验证的绿。
+        required_env = entry.get('requires_env')
+        if required_env and not os.environ.get(required_env):
+            print(f'skip {suite}: 需要 {required_env}，未设置时它自己会 SKIP 并以 0 退出')
             continue
         if not filters or any(pattern in suite for pattern in filters):
             chosen.append(suite)

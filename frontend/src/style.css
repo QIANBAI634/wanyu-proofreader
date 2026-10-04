@@ -445,6 +445,7 @@ tr:hover td { background: var(--gray-50); }
 .queue-tier:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .queue-tier:disabled { cursor: default; opacity: .55; }
 .queue-tier--muted { border-style: dashed; color: var(--gray-500); cursor: default; }
+.queue-tier--warn { border-color: var(--warn); color: var(--warn); cursor: default; }
 .queue-metrics dd { margin-top: .25rem; color: var(--ink); font-size: 1rem; font-weight: 700; }
 .project-work-card__footer > span { color: var(--gray-500); font-size: .78rem; }
 .skeleton-card { min-height: 280px; align-content: start; pointer-events: none; }
@@ -945,3 +946,23 @@ button, input, select, textarea { font-family: inherit; }
   .keyboard-panel .ipa-keyboard-heading { min-height: 2.75rem; align-items: center; margin-bottom: .2rem; }
   .keyboard-panel .ipa-section { margin: 0; }
 }
+
+/* #234 管理端机器疑点区块 */
+.assist-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.assist-summary, .assist-notice { color: var(--gray-600); font-size: .84rem; margin: .4rem 0; }
+.assist-filter { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--gray-600); }
+.assist-filter select { padding: .25rem .4rem; }
+.assist-list { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+.assist-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .55rem; padding: .45rem .2rem; border-top: 1px solid var(--gray-100); font-size: .84rem; }
+.assist-field { color: var(--gray-700); font-variant-numeric: tabular-nums; }
+.assist-locator { color: var(--gray-800); font-weight: 600; font-variant-numeric: tabular-nums; }
+.assist-span { color: var(--gray-600); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.assist-severity { border: 1px solid var(--gray-200); border-radius: 999px; padding: 0 .5rem; font-size: .74rem; }
+.assist-severity--strong { border-color: var(--danger); color: var(--danger); }
+.assist-severity--warn { border-color: var(--accent); color: var(--accent); }
+.assist-wording { flex: 1 1 18rem; color: var(--gray-700); }
+.assist-gate { color: var(--gray-500); font-size: .76rem; }
+.assist-pager { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; font-size: .8rem; }
+.assist-empty { color: var(--gray-600); font-size: .84rem; }
+.blocked-conclusion { margin-top: 1.25rem; border-top: 1px solid var(--gray-200); padding-top: 1rem; }
+.blocked-conclusion__current { font-size: .84rem; color: var(--gray-700); }

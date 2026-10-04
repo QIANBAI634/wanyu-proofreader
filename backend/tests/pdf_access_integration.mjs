@@ -33,6 +33,31 @@ const claim=await api(`/api/fangji/projects/${project.id}/claim`,{method:'POST',
 const url=`/api/fangji/pages/${page.id}/pdf`
 async function check(path,auth,status,headers={}) {const r=await fetch(base+path,{headers:{Authorization:auth,...headers}});assert.equal(r.status,status,r.status===status?'':await r.text());return r}
 await check(url,'',401);await check(url,users[1].token,403)
+const imageDescriptor = `/api/fangji/pages/${page.id}/images/2/descriptor`
+await check(imageDescriptor,'',401)
+await check(imageDescriptor,users[1].token,403)
+await check(`/api/fangji/pages/${page.id}/images/1/descriptor`,users[0].token,403)
+await check(`/api/fangji/pages/${page.id}/images/4/descriptor`,users[0].token,403)
+let imageInfo
+if (process.env.REQUIRE_PAGE_IMAGES === '1') {
+ for (let i=0;i<300;i++) {
+  const response=await fetch(base+imageDescriptor,{headers:{Authorization:users[0].token}})
+  if(response.ok){imageInfo=await response.json();break}
+  assert.equal(response.status,404)
+  await new Promise(r=>setTimeout(r,100))
+ }
+ assert.ok(imageInfo,'prewarmed image must become available')
+ assert.ok(imageInfo.width>0 && imageInfo.height>0)
+ const img=await check(imageInfo.url,users[0].token,200)
+ assert.equal(img.headers.get('content-type'),'image/webp')
+ assert.equal(img.headers.get('cache-control'),'private, no-store')
+ assert.equal(Buffer.from(await img.arrayBuffer()).subarray(8,12).toString(),'WEBP')
+ assert.equal((await api(imageDescriptor,{token:users[0].token})).assetId,imageInfo.assetId)
+ await check(imageInfo.url,users[1].token,403)
+ await check(imageInfo.url,'',401)
+ await check(imageInfo.url.replace(/expires=\d+/,'expires=1'),users[0].token,403)
+ await check(imageInfo.url.replace(/key=[^&]+/,'key=invalid'),users[0].token,403)
+}
 const fileURL=`/api/files/${file.collectionId}/${file.id}/${file.file}`
 await check(fileURL,'',404)
 const ft=await api('/api/files/token',{method:'POST',token:users[0].token})
@@ -48,7 +73,7 @@ assert.deepEqual(Buffer.from(await warm.arrayBuffer()),firstBytes,'warm preview 
 await check(url,users[1].token,403) // Warm cache never bypasses ownership.
 
 if(process.env.PDF_BROWSER_FIXTURE){
- await writeFile(process.env.PDF_BROWSER_FIXTURE,JSON.stringify({base,auth:users[0],page,project,fileURL}))
+ await writeFile(process.env.PDF_BROWSER_FIXTURE,JSON.stringify({base,auth:users[0],claim,page,project,fileURL,imageInfo}))
  if(process.env.PDF_BROWSER_SCRIPT){const {spawnSync}=await import('node:child_process');assert.equal(spawnSync('node',[process.env.PDF_BROWSER_SCRIPT],{stdio:'inherit',env:process.env}).status,0)}
 }
 await api(`/api/collections/pages/records/${page.id}`,{method:'PATCH',token:superAuth.token,body:{pdf_page:4}})
@@ -56,6 +81,8 @@ const last=await check(url,users[0].token,200);assert.equal(last.headers.get('x-
 const lease=(await api(`/api/collections/task_leases/records?filter=${encodeURIComponent(`page="${page.id}"`)}`,{token:superAuth.token})).items[0]
 await api(`/api/collections/task_leases/records/${lease.id}`,{method:'PATCH',token:superAuth.token,body:{expires_at:'2020-01-01 00:00:00.000Z'}})
 await check(url,users[0].token,403)
+await check(imageDescriptor,users[0].token,403)
+if(imageInfo) await check(imageInfo.url,users[0].token,403)
 await api(`/api/collections/pages/records/${page.id}`,{method:'PATCH',token:superAuth.token,body:{status:'pending',proofreader:''}})
 await check(url,users[0].token,403)
 console.log('PASS: authenticated two-page/last-page preview; anonymous, other-user, full-file/file-token/Range, expired/released access blocked; manager original access preserved')

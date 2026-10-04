@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -205,12 +206,12 @@ func (s *importService) preparePDFPages(file *core.Record) (string, error) {
 // Parse the book once, extracting one page at a time to bound memory and disk expansion.
 func splitPDFPages(reader io.ReadSeeker, dir string, budget int64) error {
 	pdfapi.DisableConfigDir()
-	ctx, err := pdfapi.ReadValidateAndOptimize(reader, pdfConfig())
+	ctx, err := pdfapi.ReadValidateAndOptimize(context.Background(), reader, pdfConfig(), nil)
 	if err != nil {
 		return err
 	}
 	for n := 1; n <= ctx.PageCount; n++ {
-		page, err := pdfapi.ExtractPage(ctx, n)
+		page, err := pdfapi.ExtractPage(context.Background(), ctx, n)
 		if err != nil {
 			return err
 		}
@@ -341,7 +342,7 @@ func mergeCachedPDFPages(dir string, start, end int, stamp string, stages *previ
 	stages.markOpen(openStart)
 	var excerpt bytes.Buffer
 	mergeStart := time.Now()
-	err := pdfapi.MergeRaw(readers, &excerpt, false, pdfConfig())
+	err := pdfapi.MergeRaw(context.Background(), readers, &excerpt, false, pdfConfig())
 	stages.markMerge(mergeStart)
 	if err != nil {
 		return nil, err

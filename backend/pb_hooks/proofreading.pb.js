@@ -31,9 +31,11 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
     status: page.getString("status"),
     proofreader: page.getString("proofreader"),
     // 这里**不放 difficulty_tier**：docs/plans/2026-09-25-task-difficulty.md §6 的红线是
-    // tier 不得出现在校对端任何响应里（它的输入含"该列历史仲裁进入率"，泄露的就是
-    // 别人在这条上反复出事这件事）。#162 的分层是服务端按层级挑选 + 大厅的项目级计数，
-    // 两者都不需要把某一条的档位告诉校对员。
+    // tier 不得出现在校对端任何响应里。理由是 tier 是"机器与人对这条的判断"而不是条目内容：
+    // 输入含疑点计数、列角色、项目内分布离群，以及 `blocked_reason` 这个**别人写下的结论**
+    // （授权未决之类是跨项目的资料级判断）。透给正在做这条的人，等于告诉他"上面已经有人
+    // 对它下过结论"。#162 的分层是服务端按层级挑选 + 大厅的项目级计数，都不需要下发档位。
+    // （旧理由里的"该列历史仲裁进入率"随 #239 结论 A 下线，那句已不成立；红线与它无关。）
     leaseToken: issued.token,
     leaseExpiresAt: issued.expiresAt
   })

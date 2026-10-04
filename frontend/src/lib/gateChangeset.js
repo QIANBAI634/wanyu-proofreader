@@ -20,6 +20,24 @@ export const ACTION_LABELS = {
   locked: '保持人工降档'
 }
 
+// 通道的三种说法。`unknown` 不并进前两类：表上没登记的身份，
+// 连"能不能拿到档位"都不知道，替它下结论就是 #254 反对的那种沉默。
+export const CHANNEL_LABELS = {
+  scored: '可打分',
+  unscored: '无打分通道',
+  unknown: '未登记通道'
+}
+
+export function channelLabel(channel) {
+  return CHANNEL_LABELS[channel] ?? CHANNEL_LABELS.unknown
+}
+
+export function channelBadgeClass(channel) {
+  if (channel === 'unscored') return 'badge badge-warn'
+  if (channel === 'unknown') return 'badge badge-neutral'
+  return 'badge badge-ok'
+}
+
 export function gateLabel(gate) {
   return GATE_LABELS[gate] || gate || '未登记'
 }

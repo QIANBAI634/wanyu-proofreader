@@ -105,6 +105,8 @@ jobs:
         # is not a required context: a CR-bearing blob turns this check red
         # without blocking the merge.
         run: python3 scripts/check_line_endings.py
+      - name: UI debt ratchet
+        run: python3 scripts/check_ui_debt.py
 
   pocketbase-compatibility:
     name: PocketBase compatibility (${{ matrix.suite }})
@@ -246,6 +248,125 @@ jobs:
           path: output/playwright/pdf-upload/*.png
           if-no-files-found: ignore
 
+  assist-browser:
+    name: Assist admin, hall and editor screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Build the SPA for same-origin API calls
+        run: |
+          npm --prefix frontend ci
+          # 构建期把后端指到同源：截图脚本用 route 拦截把 /api/* 转发给真实服务端，
+          # 而生产 CSP 的 connect-src 不含 http://127.0.0.1:8090，指向它会被拦成
+          # "页面暂时无法显示"，于是整条作业只会截到错误边界。
+          VITE_PB_URL=http://localhost npm --prefix frontend run build
+      - name: Install browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/assist-browser" playwright@1.62.1
+          "$RUNNER_TEMP/assist-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Capture admin states, the hall tier strip and the proofreader editor
+        env:
+          NODE_PATH: ${{ runner.temp }}/assist-browser/node_modules
+          ASSIST_BROWSER_SCRIPT: ${{ github.workspace }}/backend/tests/assist_browser.cjs
+          ASSIST_BROWSER_FIXTURE: ${{ runner.temp }}/assist-browser-fixture.json
+        run: python3 backend/tests/run_integration.py assist_browser_integration.mjs
+      - name: Verify every screenshot exists and is non-trivial
+        if: success()
+        run: |
+          # 这些状态名与 backend/tests/assist_browser_integration.mjs 的名字清单一一对应。
+          # 留这一层不是为了再看一次图，而是防"套件被静默 SKIP"：没设
+          # ASSIST_BROWSER_SCRIPT 时套件会退出 0，只有这里能发现产物根本不存在。
+          for state in findings-normal findings-empty-never-run findings-empty-clean \
+                   findings-forbidden findings-no-channel findings-waiting-evidence \
+                   hall-tiers hall-claim-by-tier proofreader-gated proofreader-hints \
+                   blocked-conclusion-unset blocked-conclusion-settled \
+                   blocked-conclusion-no-permission; do
+            test -s "output/playwright/assist-admin/${state}.png" || {
+              echo "Missing or empty assist screenshot: ${state}.png" >&2
+              exit 1
+            }
+          done
+      - name: Attach assist screenshots
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: assist-admin-states
+          path: output/playwright/assist-admin/*.png
+          if-no-files-found: error
+      - name: Attach assist screenshots after failure
+        if: ${{ always() && !success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: assist-admin-states
+          path: output/playwright/assist-admin/*.png
+          if-no-files-found: ignore
+
+  quality-state-browser:
+    name: Quality state admin screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Build the SPA for same-origin API calls
+        run: |
+          npm --prefix frontend ci
+          # 与 assist-browser 同一理由：构建期把后端指到同源，否则生产 CSP 的
+          # connect-src 不含 http://127.0.0.1:8090，截图只会截到错误边界。
+          VITE_PB_URL=http://localhost npm --prefix frontend run build
+      - name: Install browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/quality-browser" playwright@1.62.1
+          "$RUNNER_TEMP/quality-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Capture the quality state summary, filter and dialog paths
+        env:
+          NODE_PATH: ${{ runner.temp }}/quality-browser/node_modules
+          QUALITY_BROWSER_SCRIPT: ${{ github.workspace }}/backend/tests/quality_state_browser.cjs
+          QUALITY_BROWSER_FIXTURE: ${{ runner.temp }}/quality-browser-fixture.json
+        run: python3 backend/tests/run_integration.py quality_state_browser_integration.mjs
+      - name: Verify every screenshot exists and is non-trivial
+        if: success()
+        run: |
+          # 与 quality_state_browser_integration.mjs 的名字清单一一对应。
+          # 留这一层是防"套件被静默 SKIP"：没设 QUALITY_BROWSER_SCRIPT 时套件退出 0，
+          # 只有这里能发现产物根本不存在。
+          for state in quality-state-summary quality-state-filter-withheld \
+                   quality-state-basis-required quality-state-server-rejected \
+                   quality-state-after-change quality-state-empty-project; do
+            test -s "output/playwright/quality-state/${state}.png" || {
+              echo "Missing or empty quality state screenshot: ${state}.png" >&2
+              exit 1
+            }
+          done
+      - name: Attach quality state screenshots
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-state-admin
+          path: output/playwright/quality-state/*.png
+          if-no-files-found: error
+      - name: Attach quality state screenshots after failure
+        if: ${{ always() && !success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-state-admin
+          path: output/playwright/quality-state/*.png
+          if-no-files-found: ignore
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -256,6 +377,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Set up Python for UI debt ratchet
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: UI debt ratchet (required Frontend context)
+        # Same policy as verify-static. All kinds start in warn mode; enabling
+        # fail in the baseline turns this required context red on an increase.
+        working-directory: .
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_check_ui_debt.py'
+          python3 scripts/check_ui_debt.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -497,9 +631,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+      - name: Install page image renderers
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils webp
       - run: go test ./...
         working-directory: backend
-      - run: python3 backend/tests/run_integration.py pdf_access_integration.mjs
+      - run: python3 backend/tests/run_integration.py pdf_access_integration.mjs --env REQUIRE_PAGE_IMAGES=1
       - name: Install PDF rendering test browser
         run: |
           npm install --prefix "$RUNNER_TEMP/pdf-browser" playwright@1.62.1
@@ -517,3 +653,17 @@ jobs:
           PDF_REUSE_BROWSER_SCRIPT: ${{ github.workspace }}/backend/tests/pdf_reuse_browser.cjs
           PDF_BROWSER_FIXTURE: ${{ runner.temp }}/pdf-reuse-fixture.json
         run: python3 backend/tests/run_integration.py pdf_reuse_integration.mjs
+      - name: Verify page images, adjacent preload and PDF fallback
+        env:
+          NODE_PATH: ${{ runner.temp }}/pdf-browser/node_modules
+          PDF_BROWSER_SCRIPT: ${{ github.workspace }}/backend/tests/page_images_browser.cjs
+          PDF_BROWSER_FIXTURE: ${{ runner.temp }}/page-images-fixture.json
+          PDF_BROWSER_OUTPUT: ${{ runner.temp }}/page-images-evidence
+        run: python3 backend/tests/run_integration.py pdf_access_integration.mjs --env REQUIRE_PAGE_IMAGES=1
+      - name: Save page image browser evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: page-image-browser-evidence
+          path: ${{ runner.temp }}/page-images-evidence
+          if-no-files-found: ignore

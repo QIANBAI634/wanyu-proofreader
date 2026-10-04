@@ -20,12 +20,20 @@
 // 不做的事（#178 非目标）：不合并、不删除、不做模糊匹配/编辑距离/向量相似度（那是 L2 #181）、
 // 不跨项目、不裁决谁对、不写回任何值。
 
-const IDENTITY_VERSION = "identity-v2"
-// 从 v1 升版的原因不是加了第三个 kind，而是**同身份分歧的归类规则变了**：
+const IDENTITY_VERSION = "identity-v3"
+// v1 → v2 的原因不是加了第三个 kind，而是**同身份分歧的归类规则变了**：
 // 以前所有分歧都叫 duplicate_identity，现在能归因到不同登记来源的那批改叫
 // cross_source_conflict。同一份数据用 v1 与 v2 会产出不同 kind，而 gate 的四元组里
 // 带 producer_version，所以升版等于"新 kinds 一律从 off 重新攒证据"——这正是
 // docs/plans/2026-09-25-assist-rule-thresholds.md §2 想要的效果，不是副作用。
+//
+// v2 → v3 是同一类变更，而且更彻底：判据的**取列口径**换了。词头取哪一列、记音取哪一列、
+// 哪些列可比、什么时候才判「释义里混进记音」四条都由 `identityColumns(roles)` 按 #170 的
+// 列角色推导，未标够两段时才整份回退莆仙词表。同一份数据在标角色前后会产出不同的键与
+// 不同的 kind，所以 v2 这个档位身份不再能同时容纳两批判定：某个项目中途采纳列角色时，
+// 旧批次的 `n`/`p̂` 与新批次的判据不再对应同一套规则，而 gate 恰恰是按
+// `(producer, producer_version, kind, message_key)` 攒证据的。升版即"新口径从 off 重攒"。
+// 这条要求写在 docs/plans/2026-09-25-cross-row-conflicts.md 的升版预告里，本支就是那个「届时」。
 // 挂靠口径的词表由 assist_rules.js 拥有（ANCHOR_ENTRY / ANCHOR_COLUMN / ANCHOR_PDF_PAGE）。
 // #178 的三条疑点都是"逐成员产条、挂在这个成员自己那一条上"，所以一律 entry；契约侧
 // anchor 是**每条**必填（docs/plans/2026-09-25-review-findings.md §8.1 第 2 条），
@@ -33,10 +41,61 @@ const IDENTITY_VERSION = "identity-v2"
 // 免得这里是一份会各自漂移的字面量。
 const ANCHOR_ENTRY = "entry"
 
-// 莆仙正本的列名。#170 落地后要改成按角色查询（与 #177 的 R5/R6 同一处债务）。
+// 莆仙正本的列名：只作为"项目还没标列角色"时的兼容路径存在。
+// 主路径是 #170 的列角色（见 identityColumns）——换成蒙古语正本（#94）时
+// 「词条/拼音/莆田IPA」一个都不存在，靠这份词表判身份会一条跨行疑点都产不出来，
+// 而症状是"这批很干净"而不是报错。
 const HEADWORD_FIELDS = ["词条"]
 const READING_FIELDS = ["拼音", "莆田IPA", "仙游IPA"]
 const COMPARABLE_FIELDS = ["释义", "地区", "来源"]
+const MEANING_FIELD = "释义"
+
+function fieldsForRole(roles, role) {
+  return Object.entries(roles ?? {}).filter(([, value]) => value === role).map(([key]) => key)
+}
+
+/**
+ * 由列角色推导本项目的身份列集合。
+ *
+ * 回退规则要说清：**角色凑不齐"词头 + 记音"这两段时整份回退到硬编码词表**，
+ * 而不是半用角色半用词表。理由是不能因为管理员标漏了一列就让判据失去能力——
+ * 莆仙正本在只标了 `词头` 的项目里今天照样能算，改完不许变差。
+ * 反过来，只要两段都齐了就走角色，硬编码词表不再参与。
+ */
+function identityColumns(roles) {
+  const fallback = {
+    headword: HEADWORD_FIELDS,
+    reading: READING_FIELDS,
+    comparable: COMPARABLE_FIELDS,
+    meaningField: MEANING_FIELD,
+    source: "hardcoded"
+  }
+  const headword = fieldsForRole(roles, "headword")
+  // 记音段只认 `reading`。#170 的 ROLES 里没有 `ipa` 这一档：validateRoleMap 会拒掉带
+  // `ipa` 的请求，parseStoredRoles 又会把库里躺着的那种值折成 unspecified，所以"也认 ipa"
+  // 是到不了代码的分支。莆仙正本里 拼音/莆田IPA/仙游IPA 三列互为佐证的形状，由下面的
+  // hardcoded 回退路径负责；真要让别的正本把 IPA 单独标一档，那是 #170 的枚举改动，
+  // 该带 ROLES、前端 FIELD_ROLES、建议规则与文档一起改，不藏在这支里。
+  const reading = fieldsForRole(roles, "reading")
+  if (!headword.length || !reading.length) return fallback
+  const meaning = fieldsForRole(roles, "meaning")
+  const comparable = [
+    ...meaning,
+    ...fieldsForRole(roles, "region"),
+    ...fieldsForRole(roles, "example"),
+    ...fieldsForRole(roles, "note")
+  ]
+  return {
+    headword,
+    reading,
+    // 「来源」是历史兼容项：角色词表里没有它，硬编码时列进来，按角色时就没有。
+    comparable,
+    meaningField: meaning[0] ?? null,
+    source: "roles"
+  }
+}
+
+const DEFAULT_COLUMNS = identityColumns(null)
 
 // 全/半角折叠：复用 #177 R4 的成对表，避免两处各写一份折叠规则而漂移。
 const WIDTH_FOLDS = new Map([
@@ -76,15 +135,15 @@ function firstPresent(row, fields) {
  *
  * 两段任一缺失就返回 null：宁可不算，也不拿一个不完整的键去误伤别的条目。
  */
-function entryIdentityKey(row) {
-  const headword = firstPresent(row, HEADWORD_FIELDS)
-  const reading = firstPresent(row, READING_FIELDS)
+function entryIdentityKey(row, columns = DEFAULT_COLUMNS) {
+  const headword = firstPresent(row, columns.headword)
+  const reading = firstPresent(row, columns.reading)
   if (!headword || !reading) return null
   return `${normalizeText(headword.value)} ${normalizeText(reading.value)}`
 }
 
-function identityParts(row) {
-  const key = entryIdentityKey(row)
+function identityParts(row, columns = DEFAULT_COLUMNS) {
+  const key = entryIdentityKey(row, columns)
   if (!key) return null
   const cut = key.indexOf(" ")
   return { key, headword: key.slice(0, cut), reading: key.slice(cut + 1) }
@@ -100,9 +159,9 @@ function identityParts(row) {
 // 判据：该字段有 ≥2 个不同取值，且这些取值背后的来源集合不止一种。
 // 来源为空串（未关联 sources）不参与来源集合 —— 拿"未知"去证明"两份材料互斥"
 // 就是虚假结论，这正是 #178 正文要求"来源缺失时不报跨来源冲突"的原因。
-function crossSourceFields(bucket) {
+function crossSourceFields(bucket, columns = DEFAULT_COLUMNS) {
   const fields = []
-  for (const field of COMPARABLE_FIELDS) {
+  for (const field of columns.comparable) {
     const signatures = new Set()
     let valueCount = 0
     const byValue = new Map()
@@ -122,11 +181,11 @@ function crossSourceFields(bucket) {
   return fields
 }
 
-function findIdentityConflicts(entries, dismissed = new Set()) {
+function findIdentityConflicts(entries, dismissed = new Set(), columns = DEFAULT_COLUMNS) {
   const groups = new Map()
   let noKey = 0
   for (const entry of entries) {
-    const parts = identityParts(entry.row)
+    const parts = identityParts(entry.row, columns)
     if (!parts) { noKey += 1; continue }
     const bucket = groups.get(parts.key) ?? []
     bucket.push({ ...entry, parts })
@@ -136,21 +195,36 @@ function findIdentityConflicts(entries, dismissed = new Set()) {
   const findings = []
   let compared = 0
   let unattributed = 0
+  // 有键、有分组，但可比列一个都没配上（角色只标了词头/记音，或可比列取值全空）。
+  // 这一格既不进 compared 也不进 unattributed，不另计就成了第二个"静默零"。
+  let uncomparable = 0
   for (const [key, bucket] of [...groups].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     if (bucket.length < 2) continue
     if (dismissed.has(key)) continue
-    const others = COMPARABLE_FIELDS
+    let comparableSeen = 0
+    const others = columns.comparable
       .map((field) => {
         const values = new Set(bucket.map((item) => normalizeText(item.row?.[field])).filter(Boolean))
+        // 这一列在这组里有任何非空取值 ⇒ 它**被比较过**，哪怕结论是完全一致。
+        if (values.size) comparableSeen += 1
         return values.size > 1 ? field : null
       })
       .filter(Boolean)
+    // 两种 0 必须分开（#238 二轮评审阻断）：
+    //   可比列一个都没配上（或全组该列都空）——这是"没在比较"，要计数；
+    //   配上了且取值一致——这是干净的组，一条都不该计。
+    // 早先写成 `!others.length` 就把后者也报成前者，一个填得整整齐齐却毫无分歧的项目
+    // 会在响应里显示"有组没在比较"，而它其实恰恰比较过了。
+    if (!comparableSeen) {
+      uncomparable += 1
+      continue
+    }
     if (!others.length) continue
     // 同词头不同拼音的两条根本不会落进同一个 key，所以 R-DEDUP 的反向用例由分组保证，
     // 不是靠"记得判断"。这里断言的是一次比较都发生在身份相同的前提下。
     compared += bucket.length
     const sources = [...new Set(bucket.map((item) => item.source).filter(Boolean))]
-    const cross = crossSourceFields(bucket)
+    const cross = crossSourceFields(bucket, columns)
     // 两个事实分开表达，不互相覆盖：
     // - `differs_on` 是**这一组里所有取值有分歧的列**（措辞需要的是全集）；
     // - `kind` / `message_key` 只在"至少有一列能归因到 ≥2 个登记来源"时才升级成跨来源冲突。
@@ -166,7 +240,7 @@ function findIdentityConflicts(entries, dismissed = new Set()) {
       findings.push({
         kind: cross.length ? "cross_source_conflict" : "duplicate_identity",
         severity: "strong",
-        field: differsOn.includes("释义") ? "释义" : differsOn[0],
+        field: columns.meaningField && differsOn.includes(columns.meaningField) ? columns.meaningField : differsOn[0],
         message_key: cross.length ? "same_identity_across_sources" : "same_identity_different_content",
         // params 只带结构信息（列名、计数、来源标识）。词头与记音的**字面值**曾经在这里
         // 出现过（identity_headword / identity_reading），全仓没有任何消费方读它们，而
@@ -188,6 +262,7 @@ function findIdentityConflicts(entries, dismissed = new Set()) {
     compared,
     unkeyed: noKey,
     unattributed_groups: unattributed,
+    uncomparable_groups: uncomparable,
     dismissed_groups: dismissed.size
   }
 }
@@ -224,10 +299,10 @@ function cellSpans(text, isHit) {
 
 const CELL_SEPARATOR = /[\s、,，;；]/
 
-function findRowShapeAnomalies(entry) {
+function findRowShapeAnomalies(entry, columns = DEFAULT_COLUMNS) {
   const out = []
   const row = entry.row ?? {}
-  for (const field of HEADWORD_FIELDS) {
+  for (const field of columns.headword) {
     const value = String(row[field] ?? "").trim()
     if (!value) continue
     const segments = value.split(/[\s、,，;；]+/).filter(Boolean)
@@ -245,7 +320,9 @@ function findRowShapeAnomalies(entry) {
       })
     }
   }
-  for (const field of ["释义"]) {
+  // 「释义里混进记音」这条只在能确定哪一列是释义时才判：
+  // 没有 meaning 角色就跳过，绝不拿第一个非身份列猜——猜错会造出不存在的疑点。
+  for (const field of columns.meaningField ? [columns.meaningField] : []) {
     const value = String(row[field] ?? "")
     if (!value.trim()) continue
     if (TONE_RUN.test(value) || IPA_HINT.test(value)) {
@@ -275,6 +352,7 @@ module.exports = {
   normalizeText,
   foldWidths,
   entryIdentityKey,
+  identityColumns,
   identityParts,
   crossSourceFields,
   findIdentityConflicts,

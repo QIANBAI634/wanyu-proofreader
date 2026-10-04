@@ -14,3 +14,11 @@ license does not replace them.
 
 The authoritative notices are the license and README files stored beside each
 component. Preserve them when updating or redistributing the assets.
+
+The backend runtime image also installs [Poppler](https://poppler.freedesktop.org/)
+(`poppler-utils`, GPL-2.0-or-later) and [libwebp](https://chromium.googlesource.com/webm/libwebp/)
+(`libwebp-tools`, BSD-3-Clause) from Alpine packages for private PDF page previews.
+They are unmodified external command-line programs; their package licenses and
+corresponding sources remain available through the Alpine package repositories.
+Generated page images retain the rights and access restrictions of their source
+documents, as described in `ASSET_BOUNDARIES.md`.

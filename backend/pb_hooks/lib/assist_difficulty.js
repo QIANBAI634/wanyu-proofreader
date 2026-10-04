@@ -45,15 +45,12 @@ const TIER_RULES = [
     rationale: "形状异常通常意味着拆分/合并问题" },
   { id: "warn_findings_ge_3", tier: "B", signal: "warn 级疑点 ≥ 3",
     rationale: "单条 warn 是噪声，成堆说明这行不干净" },
-  { id: "frequent_arbitration", tier: "B", signal: "该条目涉及的列历史仲裁进入率 ≥ 0.25",
-    rationale: "「这个位置常出事」是比单条内容更强的先验（来自 #179 的分布）" },
   { id: "glyph_table_blocked", tier: "A", signal: "blocked_reason = glyph_table",
     rationale: "查表填字是机械操作，量大但不难——正是该被大量吞掉的 A" },
   { id: "pure_transcription", tier: "A", signal: "列角色只有 headword/reading 且零疑点",
     rationale: "照抄型任务" }
 ]
 
-const ARBITRATION_RATE_TRIGGER = 0.25
 const FIELD_COUNT_OUTLIER = 2          // 与项目中位数相差 2 列以上
 const VALUE_LENGTH_OUTLIER_MADS = 6    // 最长值超过中位数 + 6×MAD
 
@@ -113,17 +110,6 @@ function firedRuleIds(input) {
     if (longest - medianLength > VALUE_LENGTH_OUTLIER_MADS * madLength) fired.add("row_shape_outlier")
   }
 
-  // #179 的分布今天还没有：arbitrationRates 为 null 时**不产生信号**。
-  // 当 0 用会让所有条目系统性偏 A（"没测过"被当成"从不出事"），这是本文件最容易犯的错。
-  const rates = input.arbitrationRates
-  if (rates && typeof rates === "object") {
-    for (const value of Object.values(rates)) {
-      if (Number.isFinite(Number(value)) && Number(value) >= ARBITRATION_RATE_TRIGGER) {
-        fired.add("frequent_arbitration")
-        break
-      }
-    }
-  }
   return fired
 }
 
@@ -154,7 +140,6 @@ module.exports = {
   TIER_RANK,
   TIER_RULES,
   BLOCKED_BUCKETS,
-  ARBITRATION_RATE_TRIGGER,
   FIELD_COUNT_OUTLIER,
   VALUE_LENGTH_OUTLIER_MADS,
   deriveDifficulty,

@@ -261,6 +261,7 @@ function revokeGate(app, identityParts, actor, note, restore = false) {
 // 门控登记表全貌。这张表是全局的（规则身份跨项目共用），所以只给平台管理员看。
 // 截断必须有可判定信号：静默按 off 处理会让"某条规则突然不显示"变成查不出来的幽灵。
 function gateListView(app, { limit = 200, offset = 0 } = {}) {
+  const coverage = require(`${__hooks}/lib/rule_coverage.js`)
   const size = Math.max(1, Math.min(1000, Number(limit) || 200))
   const start = Math.max(0, Number(offset) || 0)
   const rows = app.findRecordsByFilter("assist_rule_gates", "", "-approved_at,kind", size + 1, start)
@@ -279,7 +280,18 @@ function gateListView(app, { limit = 200, offset = 0 } = {}) {
     applied_by: record.getString("applied_by"),
     revoked_at: record.getString("revoked_at"),
     revoked_by: record.getString("revoked_by"),
-    note: record.getString("note")
+    note: record.getString("note"),
+    // #254 第 3 件事：这张表以前只说得出"当前档位与样本数"，于是"有通道、等证据"
+    // 与"现有流程永远拿不到档位"在两栏数字上长得一模一样。通道值仍由
+    // rule_coverage 单一定义算出，这里不另写一份判据。
+    // 必须摊平成普通对象再查：`channelOf` 读的是 `entry.producer_version` 这类属性，
+    // 而 goja 侧的 Record 只有 getString()——直接把 Record 传进去，每个字段都是
+    // undefined，于是所有行都退化成 `unknown`（这条正是被门控表那组断言抓出来的）。
+    scoring_channel: coverage.channelOf({
+      producer_version: record.getString("producer_version"),
+      kind: record.getString("kind"),
+      message_key: record.getString("message_key")
+    })
   }))
   return { items, truncated: rows.length > size, limit: size, offset: start }
 }

@@ -22,6 +22,13 @@
   { "suite": "source_registry_integration.mjs", "ci_matrix": true },
   { "suite": "column_roles_integration.mjs", "ci_matrix": true },
   { "suite": "gate_release_integration.mjs", "ci_matrix": true },
+  { "suite": "blocked_reason_integration.mjs", "ci_matrix": true },
   { "suite": "cross_source_integration.mjs", "ci_matrix": true },
-  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true }
+  { "suite": "assist_chain_integration.mjs", "ci_matrix": true },
+  { "suite": "assist_browser_integration.mjs", "ci_matrix": false, "requires_env": "ASSIST_BROWSER_SCRIPT", "note": "需要 playwright 与已构建的 frontend/dist；截图由 assist-browser 作业产出" },
+  { "suite": "tier_dispatch_integration.mjs", "ci_matrix": true },
+  { "suite": "assist_admin_integration.mjs", "ci_matrix": true },
+  { "suite": "artifact_export_integration.mjs", "ci_matrix": true },
+  { "suite": "quality_state_integration.mjs", "ci_matrix": true },
+  { "suite": "quality_state_browser_integration.mjs", "ci_matrix": false, "requires_env": "QUALITY_BROWSER_SCRIPT", "note": "需要 playwright 与已构建的 frontend/dist；截图由 quality-state-browser 作业产出" }
 ]

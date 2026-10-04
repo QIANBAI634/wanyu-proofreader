@@ -116,10 +116,42 @@ function hintView(record, gate) {
   }
 }
 
+// 疑点挂靠条目的定位信息（只含条目号与 PDF 页号，不含单元格正文——契约 §6）。
+//
+// 管理端此前只下发 `page`（记录 id），而 id 在人眼里不可读，管理员看完一批疑点
+// 仍然不知道去哪一条核对。取不到就留 null：`page` 是指向 pages 的 relation 且
+// cascadeDelete=true，条目删除会连带删掉疑点，所以库里不存在悬挂引用，
+// null 只可能是"该条没有 pdf_page（CSV 直接导入）"或读取异常，两者都由前端说成未知。
+// 同一次请求里一批疑点常挂在同几条上，所以带 cache，不做 N 次重复查库。
+function locatorOf(app, pageId, cache) {
+  const unknown = { page_number: null, pdf_page: null }
+  const id = String(pageId ?? "")
+  if (!id) return unknown
+  if (cache && cache.has(id)) return cache.get(id)
+  let value = unknown
+  try {
+    const entry = app.findRecordById("pages", id)
+    // number 字段未填时 goja 读到 null/""，而 pdf_page 的 min=1 ⇒ 0 一律当「未挂靠」。
+    const asOrdinal = (raw) => {
+      const n = Number(raw)
+      return Number.isInteger(n) && n > 0 ? n : null
+    }
+    value = {
+      page_number: asOrdinal(entry.get("page_number")),
+      pdf_page: asOrdinal(entry.get("pdf_page"))
+    }
+  } catch {
+    value = unknown
+  }
+  if (cache) cache.set(id, value)
+  return value
+}
+
 // 管理端口不下发 highlight：档位才是它要表达的东西，高亮是校对端的事。
 // 注意不要写成 highlight: undefined —— goja 会把 undefined 转成 null 落进响应里。
-function statisticsView(record, gate, row) {
+function statisticsView(record, gate, row, locator) {
   const view = hintView(record, gate)
+  const coverage = require(`${__hooks}/lib/rule_coverage.js`)
   return {
     id: record.id,
     field: view.field,
@@ -128,11 +160,22 @@ function statisticsView(record, gate, row) {
     message: view.message,
     evidence: view.evidence,
     page: record.getString("page"),
+    page_number: locator.page_number,
+    pdf_page: locator.pdf_page,
     project: record.getString("project"),
     producer: record.getString("producer"),
     producer_version: record.getString("producer_version"),
     produced_at: record.getString("produced_at"),
     gate,
+    // #254：`off` 有两种，界面必须说得出是哪一种——"有通道、等证据"与
+    // "现有通道量不到精度"读起来都像"再等等"，但后者永远等不到。
+    // 通道只下发给管理端：hintView（校对口）不带它，校对员不需要知道
+    // 自己手上这条能不能打分，那是放行侧的事。
+    scoring_channel: coverage.channelOf({
+      producer_version: record.getString("producer_version"),
+      kind: record.getString("kind"),
+      message_key: record.getString("message_key")
+    }),
     gate_sample_n: row ? row.getInt("sample_n") : 0,
     gate_precision_hat: row ? Number(row.get("precision_hat") || 0) : null
   }
@@ -181,9 +224,10 @@ function listForProject(dao, projectId, { page = 1, per = 50, kind = "", produce
   const { map: gates, truncated: gateTruncated } = gateMap(dao)
   // 多取一条用来判断是否还有下一页，不依赖 count 查询。
   const records = currentRecords(dao, clauses.join(" && "), "-produced_at,kind,message_key", size + 1, (index - 1) * size)
+  const locatorCache = new Map()
   const items = records.slice(0, size).map((record) => {
     const { gate, row } = gateOf(gates, record)
-    return statisticsView(record, gate, row)
+    return statisticsView(record, gate, row, locatorOf(dao, record.getString("page"), locatorCache))
   })
   return { items, hasMore: records.length > size, page: index, per: size, gate_rows_truncated: gateTruncated }
 }
@@ -199,6 +243,7 @@ module.exports = {
   identityOf,
   gateOf,
   gateMap,
+  locatorOf,
   hintsForPage,
   listForProject
 }

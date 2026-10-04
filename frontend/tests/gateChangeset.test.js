@@ -124,3 +124,21 @@ test('未知档位与动作回显原值，不静默变空', () => {
   const summary = summariseApply({ changeset: 'cs', applied: 1, entries: [{ action: 'merged' }] })
   assert.match(summary.counts, /已写入 1/)
 })
+
+// #254：门控表也要说得出"这条永远拿不到档位"，不能只有项目页会分。
+test('通道标签三态齐全，未知值不许冒充"可打分"', async () => {
+  const { CHANNEL_LABELS, channelLabel, channelBadgeClass } = await import('../src/lib/gateChangeset.js')
+  assert.deepEqual(Object.keys(CHANNEL_LABELS).sort(), ['scored', 'unknown', 'unscored'])
+  assert.equal(channelLabel('scored'), '可打分')
+  assert.equal(channelLabel('unscored'), '无打分通道')
+  assert.equal(channelLabel('nonsense'), '未登记通道')
+  assert.equal(channelLabel(undefined), '未登记通道')
+  assert.notEqual(channelBadgeClass('unscored'), channelBadgeClass('scored'), '两类共用一个样式就等于没区分')
+})
+
+test('门控表真的把通道列渲染出来', async () => {
+  const { readFileSync } = await import('node:fs')
+  const view = readFileSync(new URL('../src/views/admin/GateRulesView.vue', import.meta.url), 'utf8')
+  assert.match(view, /<th>打分通道<\/th>/, '表头没有通道列')
+  assert.match(view, /channelLabel\(item\.scoring_channel\)/, '通道值没被渲染')
+})

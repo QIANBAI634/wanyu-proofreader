@@ -12,6 +12,44 @@ import { DatabaseSync } from 'node:sqlite'
 import { buildLabels, stripSecrets } from './lib/labeling.mjs'
 
 // 抽出来以便用内存库单测同一份 SQL（列名写错是这类只读工具最常见的静默失败）。
+//
+// roles 是 #226 落进 `projects.column_roles_json` 的那份列角色，R5（必填角色列为空）
+// 的判定作用域完全由它决定。过去 `--db` 路径不读它，报告头于是写「列角色未提供，
+// R5 不参与打分」，读者会以为这条规则的精度是 0——而库里明明有答案。
+// 一张库可能跨多个项目，列角色不一致时不给"猜一个"：`rolesConflict` 必须一路传到报告里，
+// 因为「静默少评一条规则」正是本文件要修的那类事故。
+function readRoles(db) {
+  let rows
+  try {
+    rows = db.prepare(`
+      SELECT column_roles_json FROM projects
+      WHERE column_roles_json IS NOT NULL AND column_roles_json != ''
+    `).all()
+  } catch {
+    // 裁剪过的副本或旧库没有 projects 表：按"未提供"降级，不中断打分。
+    return { roles: null, rolesConflict: false }
+  }
+  const maps = new Set()
+  for (const row of rows) {
+    let parsed = null
+    try {
+      parsed = JSON.parse(row.column_roles_json)
+    } catch {
+      continue // 坏 JSON 视同没标，交给 --roles 显式覆盖
+    }
+    if (!parsed || typeof parsed !== 'object' || !Object.keys(parsed).length) continue
+    maps.add(JSON.stringify(Object.entries(parsed).sort()))
+  }
+  if (maps.size === 0) return { roles: null, rolesConflict: false }
+  if (maps.size > 1) return { roles: null, rolesConflict: true }
+  return { roles: fromEntriesSorted([...maps][0]), rolesConflict: false }
+}
+
+// entries 形如 [["词条","headword"],…] 的 JSON 串，还原成映射（顺序无关，比较时才排序）。
+function fromEntriesSorted(entriesJson) {
+  return Object.fromEntries(JSON.parse(entriesJson))
+}
+
 export function readDataset(db) {
   const pages = db.prepare(`
       SELECT id, project, proofread_row_json AS final_row_json, status
@@ -23,7 +61,8 @@ export function readDataset(db) {
       FROM proofreading_attempts
       ORDER BY page, round, pass_no
     `).all()
-    return { pages, attempts }
+    const { roles, rolesConflict } = readRoles(db)
+    return { pages, attempts, roles, rolesConflict }
 }
 
 export function loadFromSqlite(path) {

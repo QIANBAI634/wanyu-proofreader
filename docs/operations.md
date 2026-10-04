@@ -269,6 +269,20 @@ diff -u /path/to/traefik.json /tmp/traefik-upload.json
 `assist_rule_gates` 决定机器疑点要不要下发给校对员。缺行按 `off` 处理，即**一条都不给**；
 这张表没有任何自动写入方——档位变化只能由平台管理员按下面的步骤人工应用。
 
+打分前有一个前提，它出错时的症状是「报告能出、数字全空、界面一切正常」：
+
+- **弱标注需要真实提交记录。** 标签来自 `pages.proofread_row_json` 与各次
+  `proofreading_attempts.row_json` 的字段级对齐（`scripts/assist/weak_labels.mjs`），
+  没人提交过就是 0 条样本、全表 `n/a`、全规则 `off`。那是**证据不足**而不是**精度不足**，
+  两者处置不同（门槛文件 §3）：前者等证据或改抽检口径，后者才考虑关规则。
+  2026-10-02 用正本 15,022 行跑的首轮就是这个样子：疑点 31,876 条，样本 0 条。
+
+另一个容易读错的地方：`GET/PUT /api/fangji/projects/{id}/column-roles` 返回的视图是拿**表头**
+（第一条条目的列名）对照的，所以项目还没有条目时，每列都会显示 `present: false`、全部列名进
+`stale`。那不是"你标错了"，也不是 R5 不产的原因——规则引擎用的是 `column_roles_json` 这份存储映射
+配**每行自己的列名**（`lib/column_roles.js` 的 `rolesForRules`），导入前标一样生效。
+`stale` 真正的含义是"这些名字在当前表头里找不到"，导入完成后它会自己清空。
+
 判据（`strong` 需 p̂ ≥ 0.90 且 n ≥ 100；`warn` 需 p̂ ≥ 0.60 且 n ≥ 150）的唯一代码出处是
 `backend/pb_hooks/lib/gate_release.js`，打分器与写入侧共用同一份常数；口径的文档出处是
 `docs/plans/2026-09-25-assist-rule-thresholds.md` §2/§5。改判据要同时改这两处。
@@ -322,3 +336,48 @@ diff -u /path/to/traefik.json /tmp/traefik-upload.json
 `GET /api/fangji/gates?limit=N` 的 `truncated`、以及两个 findings 接口的
 `gate_rows_truncated` 是这一情况的唯一可观测出口；巡检时确认表行数远离上限，
 接近时要么清理，要么把上限连同这条纪律一起改。
+
+
+## AI 辅助校对的验收怎么跑
+
+链路是否"在校对流程里真的起作用"，看两支东西，不必靠人眼看截图：
+
+```bash
+# 端到端：导入 → 重算 → 门控挡住 → 人工放行 → 命中区间切回原文 → 降档 → 大厅对账
+python3 backend/tests/run_integration.py assist_chain_integration.mjs
+```
+
+它跑在一次性的真 PocketBase 上（`run_integration.py` 负责建库、起服务、清理），
+断言顺序就是链路顺序，所以任何一段断掉都会指出是哪一段。
+
+```bash
+# 界面证据：管理端各态 + 大厅层级条 + 校对端放行前后
+VITE_PB_URL=http://localhost npm --prefix frontend run build
+BROWSER_CHANNEL=chrome \
+  NODE_PATH="/tmp/assist-browser/node_modules" \
+  ASSIST_BROWSER_SCRIPT="$PWD/backend/tests/assist_browser.cjs" \
+  python3 backend/tests/run_integration.py assist_browser_integration.mjs
+```
+
+`BROWSER_CHANNEL` 与 `NODE_PATH` 是**本地才需要**的：CI 由 `assist-browser` 作业自己装 playwright。
+本机这两个变量各挡一个真实的坑——不指定 channel 时 playwright 会找它自己那个构建号的
+chromium（`Executable doesn't exist`），而 `NODE_PATH` 必须指向**真的装着 playwright 的那份**
+node_modules（`npm root -g` 里未必有，指向它会 `Cannot find module`）。
+跑成功的判据不是退出码，而是输出里有 `ASSIST BROWSER OK [...]` 这一行，
+且方括号里的状态名数量与截图清单一致。
+
+**这一支有个容易骗过人的地方**：没设 `ASSIST_BROWSER_SCRIPT` 时它会打印 SKIP 并以 0 退出。
+于是"全套件绿"里可能根本没跑过浏览器（`run_all.py` 现在会把这种情况显式报成 skip，
+但看汇总的人仍要知道这个区别）。CI 里由 `assist-browser` 作业负责设变量、
+校验每张 PNG 非空并上传构件，所以**要贴证据就去那次构建的构件里取**，
+不要从本地某次"其实跳过了"的运行里取。
+
+正本规模的复现命令见上面「规则门控放行与降档」的打分/变更集两步；它的产物是报告，
+不是界面，两者不要混为一份证据。
+
+同一次运行还会拍出「条目阻塞结论」的三态（#240 验收第 7 条）：
+`blocked-conclusion-unset`（库里没有结论，撤销按钮灰着）、
+`blocked-conclusion-settled`（**由界面上的表单**写入，回读串带齐 who/when/basis，
+且层级当场落 C）、`blocked-conclusion-no-permission`（项目管理员看得到「机器疑点」
+但看不到这一节，同时接口对他是真 403）。第二张必须是点出来的而不是夹具预置的，
+否则它证明的只是"前端会渲染一行字"。

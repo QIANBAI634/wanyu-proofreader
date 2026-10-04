@@ -274,6 +274,24 @@ try {
   const offManager = await request(`/api/fangji/projects/${project.id}/findings?kind=merged_columns`, { token: boss.token })
   assert.equal(offManager.items.length, 2, 'off 只挡校对端，管理端统计两条都要在')
 
+  // ---- 定位信息：管理端要把 page id 说成"第几条 / PDF 第几页"（#234 后续）----
+  // 只断言"响应里出现过 1"会让「cache 把所有行都映射成第一条」这种 bug 溜过去，
+  // 所以两条疑点必须各自落到自己那条目上：pageA=第 1 条、pageB=第 2 条。
+  await createFinding(pageB.id, project.id)
+  const located = await request(`/api/fangji/projects/${project.id}/findings?kind=merged_columns`, { token: boss.token })
+  const onA = located.items.filter((item) => item.page === pageA.id)
+  const onB = located.items.filter((item) => item.page === pageB.id)
+  assert.equal(onA.length, 2, '定位断言的前提：pageA 上确实挂着两条，否则比较是空真')
+  assert.equal(onB.length, 1, '定位断言的前提：pageB 上确实挂着一条')
+  assert.deepEqual([onA[0].page_number, onA[0].pdf_page], [1, 1])
+  assert.deepEqual([onB[0].page_number, onB[0].pdf_page], [2, 2])
+  // 校对端形状不许长出这些字段（§3.1 与 §3.2 是分开的两份契约）
+  await setGate({ kind: 'merged_columns', messageKey: 'column_collapse', gate: 'strong' })
+  const proofreaderView = await request(`/api/fangji/pages/${pageA.id}/findings`, { token: first.token })
+  assert.equal(JSON.stringify(proofreaderView.hints).includes('page_number'), false,
+    '条目定位只给管理端；校对端拿到它就能反查别人的进度')
+  await setGate({ kind: 'merged_columns', messageKey: 'column_collapse', gate: 'off' })
+
   // ---- 重算：写新批次 + 标旧批次 superseded_at，只读到最新批次，旧批次仍在库 ----
   // 第二个人认领到哪一页由两遍投票决定（默认拿到同一页做独立第二遍），
   // 所以这里按「second 实际在手的条目」断言，不假定具体是哪一页；

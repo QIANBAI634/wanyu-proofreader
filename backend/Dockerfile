@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM alpine:3.24
 
-RUN apk add --no-cache ca-certificates curl \
+RUN apk add --no-cache ca-certificates curl poppler-utils libwebp-tools \
   && addgroup -g 10001 fangji \
   && adduser -D -u 10001 -G fangji fangji \
   && mkdir -p /pb/pb_data \

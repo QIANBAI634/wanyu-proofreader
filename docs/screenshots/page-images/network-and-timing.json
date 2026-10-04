@@ -1,0 +1,34 @@
+{
+  "desktop": {
+    "initialMs": 354,
+    "network": [
+      "/api/fangji/pages/6d1c8qxht1rjhtf/pdf/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/asset",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/asset",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/descriptor"
+    ]
+  },
+  "mobile": {
+    "initialMs": 220,
+    "network": [
+      "/api/fangji/pages/6d1c8qxht1rjhtf/pdf/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/asset",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/asset",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/3/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/descriptor"
+    ]
+  },
+  "fallback": {
+    "initialMs": 410,
+    "network": [
+      "/api/fangji/pages/6d1c8qxht1rjhtf/pdf/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/images/2/descriptor",
+      "/api/fangji/pages/6d1c8qxht1rjhtf/pdf"
+    ]
+  }
+}

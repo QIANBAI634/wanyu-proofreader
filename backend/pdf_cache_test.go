@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	pdfapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pocketbase/pocketbase"
@@ -54,7 +55,7 @@ func TestCachedTaskPDFDegradesWithoutSplittingTheBook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := pdfapi.PageCount(bytes.NewReader(output), nil)
+	count, err := pdfapi.PageCount(context.Background(), bytes.NewReader(output), nil)
 	if err != nil || count != 2 {
 		t.Fatalf("degraded preview: count=%d err=%v", count, err)
 	}
@@ -146,7 +147,7 @@ func TestCachedTaskPDFReportsAnUnreadablePageDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := pdfapi.PageCount(bytes.NewReader(output), nil)
+	count, err := pdfapi.PageCount(context.Background(), bytes.NewReader(output), nil)
 	if err != nil || count != 2 {
 		t.Fatalf("degraded preview: count=%d err=%v", count, err)
 	}
@@ -165,7 +166,7 @@ func TestSplitPDFPagesKeepsRotationAndOnlyOnePage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, err := pdfapi.ReadAndValidate(f, pdfConfig())
+		ctx, err := pdfapi.ReadAndValidate(context.Background(), f, pdfConfig())
 		f.Close()
 		if err != nil || ctx.PageCount != 1 {
 			t.Fatalf("%s: %v", name, err)

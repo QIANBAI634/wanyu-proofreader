@@ -70,13 +70,14 @@ const CASES = {
     { kind: 'punctuation_mix', severity: 'warn', field: '释义' },
     { kind: 'confusable_substitution', severity: 'warn', field: '仙游IPA' }
   ] },
-  frequent_arbitration: { arbitrationRates: { 莆田IPA: 0.3 } },
   glyph_table_blocked: { blockedReason: 'glyph_table' },
   pure_transcription: { roles: { 词条: 'headword', 拼音: 'reading' }, pdfPage: 3 }
 }
 
+// 输入面里没有"他人结果"这一项：#239 的定性结论是判据下线（选 A）。
+// 表驱动那段逐行比对 TIER_RULES，删了判据却留着输入字段就会红。
 const base = { findings: [], pdfPage: 3, blockedReason: 'unknown', fieldCount: 5,
-  valueLengths: [2, 3], projectStats: null, arbitrationRates: null, roles: null }
+  valueLengths: [2, 3], projectStats: null, roles: null }
 
 for (const rule of difficulty.TIER_RULES) {
   const input = { ...base, pdfPage: 3, ...CASES[rule.id],
@@ -109,13 +110,9 @@ assert.deepEqual(silent.basis, [])
 // 从没算过（字段为空）与算过但是 unknown 是两件事，由调用方在库里区分；这里只保证
 // 纯函数对"无信号"给出 unknown 而不是猜一个档位。
 
-// #179 的分布缺失时不得产生仲裁信号——把它当 0 会让全体偏 A。
-assert.equal(difficulty.deriveDifficulty({ ...base, arbitrationRates: null }).basis
-  .includes('frequent_arbitration'), false)
-assert.equal(difficulty.deriveDifficulty({ ...base, arbitrationRates: {} }).basis
-  .includes('frequent_arbitration'), false)
-assert.equal(difficulty.deriveDifficulty({ ...base, arbitrationRates: { 莆田IPA: 0.24 } }).basis
-  .includes('frequent_arbitration'), false, '阈值边界 0.25 以下不得触发')
+// 判据已按 #239 结论 A 下线：输入里再带仲裁率也不许产生任何信号。
+assert.equal(difficulty.deriveDifficulty({ ...base, arbitrationRates: { 莆田IPA: 0.9 } })
+  .basis.includes('frequent_arbitration'), false, '已下线的判据又活了')
 
 // 稳定可复算：同一份输入两次结果逐字节相同。
 const again = difficulty.deriveDifficulty({ ...base, blockedReason: 'column_merge' })

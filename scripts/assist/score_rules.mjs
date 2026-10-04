@@ -19,9 +19,14 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const here = path.dirname(fileURLToPath(import.meta.url))
 const rules = require('../../backend/pb_hooks/lib/assist_rules.js')
+const coverage = require('../../backend/pb_hooks/lib/rule_coverage.js')
 
 // 参与打分的规则 = 规则身份 + 判据上下文。#177 新增规则时这里要跟上，
 // 否则那条规则永远不会出现在基线报告里（这是最容易漏的一步）。
+//
+// 但"漏了"从今天起不再只能靠人记住：清单必须与 backend/pb_hooks/lib/rule_coverage.js
+// 的 SCORED **双向相等**（#254）。只判包含会放过"登记了通道却忘了写打分"那一侧，
+// 而它的症状恰好就是这条 issue 报的那个——某族疑点在产，报告里两栏都不出现。
 export function defaultRuleSet({ keyboards = [], roles = null }) {
   const context = rules.makeContext({ keyboards, roles })
   const list = [
@@ -32,10 +37,23 @@ export function defaultRuleSet({ keyboards = [], roles = null }) {
     { name: 'R6 tone_token_count_differs', kind: 'reading_format_invalid', message_key: 'tone_token_count_differs', scope: 'reading', context }
   ]
   // 未覆盖（本报告以 n/a 呈现，不算 0 精度）：R3 列级 mixed_normalization_forms、
-  // R4 punctuation_mix、R7 两个判据。它们要看到整列/全项目才成立，
-  // 而弱标注是按 (提交, 字段) 对齐的粒度。
+  // R4 punctuation_mix、R7 两个判据，以及跨行身份那一族。它们要看到整列/整批/相邻两条
+  // 才成立，而弱标注是按 (提交, 字段) 对齐的粒度——点名与理由在 rule_coverage.js 的
+  // UNSCORED 里，由变更集报告渲染，不在这里重复一遍。
   if (roles && Object.keys(roles).length) {
     list.push({ name: 'R5 missing_field', kind: 'missing_field', message_key: 'required_role_field_empty', scope: 'role_required', context })
+  }
+  const producerVersion = rules.RULES_VERSION
+  coverage.assertCovered(
+    list.map((item) => ({ producer_version: producerVersion, kind: item.kind, message_key: item.message_key })),
+    '打分清单'
+  )
+  const expected = coverage.SCORED
+    .filter((item) => !item.requires_roles || (roles && Object.keys(roles).length))
+    .filter((item) => !list.some((entry) => entry.kind === item.kind && entry.message_key === item.message_key))
+  if (expected.length) {
+    throw new Error(`打分清单漏了 ${expected.length} 条已登记为可打分的判据：` +
+      expected.map((item) => `${item.rule}(${item.message_key})`).join('、'))
   }
   return list
 }
@@ -57,13 +75,25 @@ function main() {
   const dataset = values.db ? loadFromSqlite(values.db) : loadFromRecords(values.records)
   const keyboardPath = values.keyboard || path.join(here, '..', '..', 'backend', 'keyboards', 'hinghwa-dialect.json')
   const keyboards = [{ definition: JSON.parse(readFileSync(keyboardPath, 'utf8')) }]
-  // roles 可以由 --roles 指定文件；用 --records 时若导出文件自带 roles 就沿用它，
-  // 否则报告会静默少了 R5，读者以为该规则精度为 0。
-  const roles = values.roles ? JSON.parse(readFileSync(values.roles, 'utf8'))
-    : (dataset.roles && Object.keys(dataset.roles).length ? dataset.roles : null)
+  // 列角色决定 R5 的判定作用域。三种来源必须分开说，因为它们的处置动作不同：
+  // --roles 显式给的 > 库内读的 > 没有；库内多项目不一致时**不猜**，
+  // 直接降到"R5 不参与打分"并把原因写进报告头（静默少评一条规则是这类工具最常见的假绿）。
+  const dbRoles = dataset.roles && Object.keys(dataset.roles).length ? dataset.roles : null
+  const rolesConflict = Boolean(dataset.rolesConflict) && !values.roles
+  const roles = values.roles ? JSON.parse(readFileSync(values.roles, 'utf8')) : dbRoles
+  const rolesNote = values.roles ? '已提供（--roles 指定）'
+    : rolesConflict ? '不一致（本库含多个项目且列角色不同，R5 不参与打分；请按项目分别打分或用 --roles 指定）'
+      : roles ? (values.db ? '已提供（读自库内 projects.column_roles_json）' : '已提供（导出文件自带 roles）')
+        : '未提供（这份数据里没有任何列角色登记，R5 不参与打分）'
   const labels = buildLabels(dataset)
   const result = scoreRules(labels, defaultRuleSet({ keyboards, roles }))
-  const synthetic = { ...result, labels: stripSecrets(labels) }
+  // scope_roles 不是装饰：gate_changeset.mjs 要据此判断"本轮作用域里应当出现哪些可打分判据"。
+  // 没有它，R5 缺席到底是漏了还是没给列角色，读产物的人分不出来（#254 验收第 1 条）。
+  const synthetic = {
+    ...result,
+    labels: stripSecrets(labels),
+    scope_roles: Boolean(roles && Object.keys(roles).length)
+  }
 
   const real = values['real-report'] ? JSON.parse(readFileSync(values['real-report'], 'utf8')) : null
   const report = renderReport(synthetic, {
@@ -74,7 +104,7 @@ function main() {
     generatedAt: values.date || new Date().toISOString().slice(0, 10),
     sourceNote: `样本来自 ${values.db ? path.basename(values.db) : path.basename(values.records)}：`
       + `条目 ${dataset.pages.length}、提交 ${dataset.attempts.length}、字段级样本 ${labels.length}。`
-      + ` 键盘口径 = ${path.basename(keyboardPath)}；列角色 = ${roles ? '已提供' : '未提供（#170 未落地，R5 不参与打分）'}。`
+      + ` 键盘口径 = ${path.basename(keyboardPath)}；列角色 = ${rolesNote}。`
   })
   if (values.json) writeFileSync(values.json, JSON.stringify(synthetic, null, 2))
   if (values.report) writeFileSync(values.report, report)

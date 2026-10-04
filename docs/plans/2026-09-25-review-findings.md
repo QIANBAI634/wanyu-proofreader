@@ -131,11 +131,25 @@ manager/平台管理员直通；否则要求「该条目正被你认领」或「
               "params": {"marks": ["0x303"]}},
               "producer": "rule", "producer_version": "v1", "gate": "off",
               "gate_sample_n": 0, "gate_precision_hat": null, "page": "rec...",
+              "page_number": 41, "pdf_page": 7,
               "project": "rec...", "produced_at": "2026-09-25 00:00:00.000Z",
               "evidence": {} }],
   "hasMore": false, "page": 1, "per": 50
 }
 ```
+
+定位字段（管理端专属，校对端 §3.1 的形状不含这些）：
+
+- `page_number` / `pdf_page` 是疑点挂靠条目的序号与它来自的 PDF 页。只有 `page`（记录 id）
+  时管理员读不出「这是第几条」，一批疑点就无处核对——这两个字段是把它变成可动作清单的关键。
+- 取值口径：`pages` 的这两个 number 字段未填时读成 `null`（`pdf_page` 的 `min = 1`，
+  所以 `0` 与空一律是「未挂靠」，不是第 0 页）。**不得**因为缺值就不返回该字段——
+  前端要能把「这条没有 PDF 页号（CSV 直接导入）」和「有页号」分开说。
+  不需要「条目已被删除」这一档：`page` 是指向 `pages` 且 `cascadeDelete = true` 的 relation，
+  删条目会连带删掉它的疑点，库里不存在悬挂引用。
+- 两者都只是结构信息（§6 允许），不含单元格正文。
+- 「第几个字」不在这里解决：`evidence.char_offsets` 只有格级判据才有（§2 表格里写明
+  R5 与列级 R3/R4、页级 R7 天生看不到单格），页图坐标级定位是 #171/#125。
 
 ## 4. 措辞：`message_key` + `params_json`
 

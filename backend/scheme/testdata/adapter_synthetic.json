@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "source_scheme_id": "synthetic-source",
+  "canonical_scheme_id": "synthetic-canonical",
+  "rule_version": "synthetic-v1",
+  "annotation_system": "tone_value",
+  "comment": "合成规则文件，不是莆仙任何一套真实方案。真实方案要等 #114 点名的莆仙乡音社清单到手，届时只替换本文件、不改引擎。",
+  "source": {
+    "onsets": [
+      "p",
+      "t",
+      "k",
+      "m",
+      "s"
+    ],
+    "rimes": [
+      "a",
+      "i",
+      "n",
+      "an"
+    ],
+    "tone_values": [
+      "533",
+      "21",
+      "4"
+    ]
+  },
+  "canonical": {
+    "onsets": [
+      "b",
+      "d",
+      "g",
+      "ʃ"
+    ],
+    "rimes": [
+      "e",
+      "u",
+      "ə"
+    ],
+    "tone_values": [
+      "533",
+      "21",
+      "4"
+    ]
+  },
+  "segment_map": [
+    {
+      "id": "O-p-b",
+      "part": "onset",
+      "from": "p",
+      "to": "b",
+      "basis": "synthetic"
+    },
+    {
+      "id": "O-t-d",
+      "part": "onset",
+      "from": "t",
+      "to": "d",
+      "basis": "synthetic"
+    },
+    {
+      "id": "O-k-g",
+      "part": "onset",
+      "from": "k",
+      "to": "g",
+      "basis": "synthetic"
+    },
+    {
+      "id": "R-a-e",
+      "part": "rime",
+      "from": "a",
+      "to": "e",
+      "basis": "synthetic"
+    },
+    {
+      "id": "R-i-u",
+      "part": "rime",
+      "from": "i",
+      "to": "u",
+      "basis": "synthetic"
+    },
+    {
+      "id": "R-an-ə",
+      "part": "rime",
+      "from": "an",
+      "to": "ə",
+      "basis": "synthetic"
+    },
+    {
+      "id": "T-533",
+      "part": "tone",
+      "from": "533",
+      "to": "533",
+      "basis": "synthetic"
+    },
+    {
+      "id": "T-21",
+      "part": "tone",
+      "from": "21",
+      "to": "21",
+      "basis": "synthetic"
+    },
+    {
+      "id": "T-4",
+      "part": "tone",
+      "from": "4",
+      "to": "4",
+      "basis": "synthetic"
+    },
+    {
+      "id": "A-n-many",
+      "part": "rime",
+      "from": "n",
+      "candidates": [
+        "u",
+        "ə"
+      ],
+      "basis": "synthetic: 源方案不区分，目标方案要求区分，程序没有足够信息"
+    }
+  ],
+  "context_rules": [
+    {
+      "id": "C-ki-ʃ",
+      "when_onset": "k",
+      "when_rime": "i",
+      "rewrite_onset": "ʃ",
+      "basis": "synthetic: k 在 i 前腭化"
+    }
+  ],
+  "exceptions": [
+    {
+      "id": "E-pa21",
+      "source_pronunciation": "pa21",
+      "canonical_pronunciation": "bu533",
+      "status": "REVIEWED",
+      "reviewer": "synthetic-reviewer",
+      "basis": "synthetic: 人工复核后的结论，用于验证复核可反哺例外表"
+    },
+    {
+      "id": "E-sa533",
+      "source_pronunciation": "sa533",
+      "canonical_pronunciation": "de533",
+      "status": "EXACT",
+      "basis": "synthetic: s 没有常规映射，旧式记法整体例外"
+    },
+    {
+      "id": "E-encoding",
+      "source_pronunciation": "pà21",
+      "canonical_pronunciation": "be533",
+      "status": "REVIEWED",
+      "reviewer": "synthetic-reviewer",
+      "basis": "synthetic: 键以 NFC 存，用来验证 NFD 输入也能命中同一条复核结论"
+    }
+  ]
+}

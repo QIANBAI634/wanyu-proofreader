@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	pdfapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"testing"
 )
@@ -12,11 +13,11 @@ func TestTaskPDFContainsOnlySelectedPagesWithWatermark(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		count, err := pdfapi.PageCount(bytes.NewReader(out), nil)
+		count, err := pdfapi.PageCount(context.Background(), bytes.NewReader(out), nil)
 		if err != nil || count != pair[1]-pair[0]+1 {
 			t.Fatalf("pages=%d err=%v", count, err)
 		}
-		marked, err := pdfapi.HasWatermarks(bytes.NewReader(out), nil)
+		marked, err := pdfapi.HasWatermarks(context.Background(), bytes.NewReader(out), nil)
 		if err != nil || !marked {
 			t.Fatalf("watermark=%v err=%v", marked, err)
 		}

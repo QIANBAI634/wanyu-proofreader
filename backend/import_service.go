@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/csv"
@@ -109,23 +110,34 @@ func logUploadRejected(requestID, kind, projectID, stage, message string, err er
 }
 
 type importService struct {
-	app        *pocketbase.PocketBase
-	queue      chan importWork
-	mu         sync.Mutex
-	pending    map[string]struct{}
-	pdfUploads *pdfUploadPool
+	app          *pocketbase.PocketBase
+	queue        chan importWork
+	imageQueue   chan importWork
+	imageContext context.Context
+	imageCancel  context.CancelFunc
+	mu           sync.Mutex
+	pending      map[string]struct{}
+	pdfUploads   *pdfUploadPool
 }
 
 func newImportService(app *pocketbase.PocketBase) *importService {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &importService{
-		app:     app,
-		queue:   make(chan importWork, 1024),
-		pending: map[string]struct{}{},
+		app:          app,
+		queue:        make(chan importWork, 1024),
+		imageQueue:   make(chan importWork, 16),
+		imageContext: ctx,
+		imageCancel:  cancel,
+		pending:      map[string]struct{}{},
 	}
 }
 
 func (s *importService) register() {
 	s.registerChunkUploads()
+	s.app.OnTerminate().BindFunc(func(e *core.TerminateEvent) error {
+		s.imageCancel()
+		return e.Next()
+	})
 	s.app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		e.Router.POST(
 			"/api/fangji/projects/{projectId}/imports/csv",
@@ -139,6 +151,9 @@ func (s *importService) register() {
 			s.uploadPDF).Bind(apis.BodyLimit(maxPDFBytes+1024*1024), // Allow multipart framing.
 			apis.RequireAuth("users"))
 
+		// Remove abandoned staging before either worker can create new directories.
+		s.cleanupPDFImageStaging()
+		go s.runPDFImageWorker(s.processPDFImages)
 		go s.runWorker()
 		go s.recoverPendingWork()
 		return e.Next()
@@ -808,6 +823,8 @@ func (s *importService) processPDF(work importWork) {
 		"page_count": pageCount,
 		"validator":  pdfValidator,
 	})
+	// Publish ready first; page images may take longer and must not block use.
+	s.schedulePDFImages(record)
 }
 
 func validatePDFStructure(reader io.ReadSeeker) (int, error) {
@@ -817,14 +834,14 @@ func validatePDFStructure(reader io.ReadSeeker) (int, error) {
 	pdfapi.DisableConfigDir()
 	configuration := pdfmodel.NewDefaultConfiguration()
 	configuration.ValidationMode = pdfmodel.ValidationRelaxed
-	context, err := pdfapi.ReadAndValidate(reader, configuration)
+	document, err := pdfapi.ReadAndValidate(context.Background(), reader, configuration)
 	if err != nil {
 		return 0, err
 	}
-	if context.PageCount < 1 {
+	if document.PageCount < 1 {
 		return 0, errors.New("PDF contains no pages")
 	}
-	return context.PageCount, nil
+	return document.PageCount, nil
 }
 
 func (s *importService) openRecordFile(record *core.Record, field string) (io.ReadSeeker, func(), error) {

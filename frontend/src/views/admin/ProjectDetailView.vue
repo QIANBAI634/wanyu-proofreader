@@ -13,6 +13,7 @@
         <a href="#project-files">文件准备</a>
         <a href="#project-export">导出结果</a>
         <a href="#project-entries">条目管理</a>
+        <a v-if="project?.capabilities?.canManage" href="#project-assist">机器疑点</a>
       </nav>
     </header>
 
@@ -245,6 +246,23 @@
         </div>
         <div v-if="mutationSuccess" class="alert alert-success" role="status">{{ mutationSuccess }}</div>
         <div v-if="mutationError" class="alert alert-error" role="alert">{{ mutationError }}</div>
+        <!-- 质量状态汇总：#172 要求管理端能回答「还有多少未收口」。计数走服务端的
+             COUNT(*) GROUP BY（quality-summary），不是把当前这页的条目数一遍——
+             后者会把「本页有 2 条暂缓」说成「项目有 2 条暂缓」。 -->
+        <div v-if="qualitySummaryError" class="alert alert-error mb-2" role="alert">
+          {{ qualitySummaryError }}
+          <button type="button" class="btn btn-secondary btn-sm ml-2" @click="loadQualitySummary">重新加载</button>
+        </div>
+        <div v-else-if="qualitySummary" class="mb-2 flex gap-2 items-center">
+          <span class="text-sm text-muted">质量状态：</span>
+          <span
+            v-for="row in qualitySummaryRows"
+            :key="row.state"
+            :class="qualityStateBadgeClass(row.state)"
+            :title="QUALITY_STATE_HINTS[row.state] || '取值表外的状态，见迁移与代码的差异'"
+          >{{ row.label }} · {{ row.count }}</span>
+          <span class="text-sm text-muted">共 {{ qualitySummary.total }} 条</span>
+        </div>
         <div v-if="pageStats.total" class="admin-list-filters mb-4">
           <label class="admin-filter-field">
             <span>搜索条目</span>
@@ -261,6 +279,15 @@
               <option value="">全部状态</option>
               <option :value="ACTIVE_STATUS_FILTER">处理中（已认领/校对中）</option>
               <option v-for="option in statusOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="admin-filter-field">
+            <span>质量状态</span>
+            <select v-model="selectedQualityState" class="form-control">
+              <option value="">全部质量状态</option>
+              <option v-for="option in qualityStateOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
               </option>
             </select>
@@ -338,6 +365,7 @@
                 <th>校对进度</th>
                 <th>当前校对员</th>
                 <th>不一致次数</th>
+                <th>质量状态</th>
                 <th>OCR文本预览</th>
                 <th style="width:100px">操作</th>
                 <th style="width:160px">顺序</th>
@@ -359,6 +387,18 @@
                 <td class="text-sm text-muted"><strong>{{ pg.proofread_count || 0 }} / {{ project?.required_proofreads || 2 }}</strong></td>
                 <td class="text-sm text-muted">{{ pg.expand?.proofreader?.name || pg.expand?.proofreader?.email || '—' }}</td>
                 <td class="text-sm text-muted">{{ pg.mismatch_count || 0 }}</td>
+                <td>
+                  <span :class="qualityStateBadgeClass(pg.quality_state)">{{ qualityStateLabel(pg.quality_state) }}</span>
+                  <button
+                    type="button"
+                    class="btn btn-quiet btn-sm ml-2"
+                    :disabled="mutatingRows"
+                    :aria-label="`设置第 ${pg.page_number} 条的质量状态`"
+                    @click="openQualityDialog(pg)"
+                  >
+                    标注
+                  </button>
+                </td>
                 <td class="text-sm text-muted" style="max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                   {{ Array.from(pg.ocr_text || '').slice(0, 80).join('') || '—' }}
                 </td>
@@ -417,7 +457,172 @@
           </nav>
         </div>
       </section>
+
+      <!-- #234 机器疑点：列级/页级与跨行判据只能整批跑，此前只有 curl 能触发 -->
+      <section v-if="project?.capabilities?.canManage" id="project-assist" class="card project-section mb-6">
+        <div class="section-heading">
+          <div>
+            <h2>机器疑点</h2>
+            <p>列级与页级判据要看到整批数据才判得出来，所以只能在这里手动触发。</p>
+          </div>
+          <div class="assist-actions">
+            <button type="button" class="btn btn-secondary" :disabled="assistBusy" @click="runIdentityRecompute">重算跨行身份</button>
+            <button type="button" class="btn" :disabled="assistBusy" @click="runFindingsRecompute">
+              {{ assistBusy ? '正在重算…' : '按项目重算疑点' }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="assistError" class="alert alert-error" role="alert">{{ assistError }}</p>
+        <p v-if="assistNotice" class="text-muted">{{ assistNotice }}</p>
+        <p v-if="assistFindingsNotice" class="alert alert-warning" role="alert">{{ assistFindingsNotice }}</p>
+
+        <p class="assist-summary">
+          当前批次 {{ assistRows.length }} 条：
+          <span v-for="entry in assistKinds" :key="entry.kind">{{ entry.label }} {{ entry.count }}、</span>
+          strong {{ assistStrong }} / warn {{ assistWarn }} / info {{ assistInfo }}；
+          <template v-if="assistGatedOff.total">{{ assistGatedOffText }}，校对员今天看不到；</template>
+          <template v-else>全部规则已放行。</template>
+        </p>
+
+        <div v-if="assistKinds.length" class="assist-filter">
+          <label>只看某类
+            <select v-model="assistKind" @change="applyAssistKindFilter">
+              <option value="">全部（本页）</option>
+              <option v-for="entry in assistKinds" :key="entry.kind" :value="entry.kind">
+                {{ entry.label }}（本页 {{ entry.count }} 条）
+              </option>
+            </select>
+          </label>
+          <button v-if="assistKind" type="button" class="btn btn-sm btn-secondary" @click="clearAssistKind">清除筛选</button>
+        </div>
+
+        <ul v-if="assistRows.length" class="assist-list">
+          <li v-for="view in assistViewRows" :key="view.row.id" class="assist-row">
+            <strong>{{ assistKindLabel(view.row.kind) }}</strong>
+            <span class="assist-field">{{ view.row.field || '整条' }}</span>
+            <span class="assist-locator">
+              {{ view.locator.entryText }}<template v-if="view.locator.pdfText"> · {{ view.locator.pdfText }}</template>
+            </span>
+            <button
+              v-if="view.locator.jumpable"
+              type="button"
+              class="btn btn-sm btn-quiet"
+              @click="jumpToEntryPage(view)"
+            >只看这页</button>
+            <span :class="['assist-severity', `assist-severity--${view.row.severity}`]">{{ assistSeverityLabel(view.row.severity) }}</span>
+            <span class="assist-wording">{{ assistWording(view.row) }}</span>
+            <span class="assist-span">{{ view.span }}</span>
+            <span class="assist-gate">gate {{ view.row.gate }} · 样本 {{ view.row.gate_sample_n }}</span>
+          </li>
+        </ul>
+        <p v-else class="text-muted assist-empty">{{ assistEmptyText }}</p>
+
+        <nav v-if="assistRows.length" class="assist-pager" aria-label="疑点分页">
+          <button type="button" class="btn btn-sm btn-secondary" :disabled="assistPage <= 1 || assistBusy" @click="stepAssistPage(-1)">上一页</button>
+          <span>第 {{ assistPage }} 页</span>
+          <button type="button" class="btn btn-sm btn-secondary" :disabled="!assistHasMore || assistBusy" @click="stepAssistPage(1)">下一页</button>
+        </nav>
+
+        <!-- #240：条目阻塞结论。写入口只对平台管理员开放（后端 blocked_reason.pb.js 里
+             三个路由都是 requireAuth + isPlatformAdmin），所以这里连控件都不给别的身份渲染。
+             控件不在 ≠ 能力被关掉了：机器路径本来就只把桶当判档输入，从不写回这一列。 -->
+        <div v-if="auth.isPlatformAdmin" class="blocked-conclusion">
+          <h3>条目阻塞结论</h3>
+          <p class="text-muted">
+            机器认不出「这条为什么卡住」时，需要一个人事先把判断写下来，并在依据里说清出处。
+            登记与撤销都会立刻重算这一条的难度层级。
+          </p>
+          <label class="form-group">
+            <span class="form-label">选择条目（本页）</span>
+            <select v-model="blockedPageId" class="form-control" @change="loadBlockedConclusion">
+              <option value="">—</option>
+              <option v-for="(pg, idx) in displayedPages" :key="pg.id" :value="pg.id">
+                第 {{ formatItemNo(pg.page_number, displayedPageOffset + idx) }} 条 · {{ statusLabel(pg.status) }}
+              </option>
+            </select>
+          </label>
+          <template v-if="blockedPageId">
+            <p class="blocked-conclusion__current">{{ blockedConclusionText }}</p>
+            <label class="form-group">
+              <span class="form-label">阻塞原因</span>
+              <select v-model="blockedForm.reason" class="form-control">
+                <option value="">—</option>
+                <option v-for="(label, key) in BUCKET_LABELS" :key="key" :value="key">{{ label }}</option>
+              </select>
+            </label>
+            <label class="form-group">
+              <span class="form-label">依据（必填）</span>
+              <textarea
+                v-model="blockedForm.basis"
+                class="form-control"
+                rows="2"
+                maxlength="500"
+                placeholder="例：授权邮件 2026-10-03；凡例 §4 第 2 条"
+              ></textarea>
+            </label>
+            <div class="flex gap-2">
+              <button type="button" class="btn btn-primary" :disabled="blockedBusy || !blockedCanSubmit" @click="saveBlockedConclusion">
+                {{ blockedBusy ? '提交中…' : '登记结论' }}
+              </button>
+              <button type="button" class="btn btn-secondary" :disabled="blockedBusy || blockedState === 'unset'" @click="clearBlockedConclusion">
+                撤销结论
+              </button>
+            </div>
+            <p v-if="blockedTier" class="text-sm text-muted">登记后层级 {{ blockedTier }} · 判据 {{ blockedTierBasis }}</p>
+          </template>
+          <p v-if="blockedError" class="alert alert-error" role="alert">{{ blockedError }}</p>
+        </div>
+
+        <h3>人工结论（不是冲突的分组）</h3>
+        <p class="text-muted">标过的分组在重算时整组跳过；这些结论不跟着机器批次下线，也不随判定人消失。</p>
+        <p v-if="assistDismissalsTruncated" class="alert alert-warning" role="alert">
+          人工结论只列出最近 200 条。更早的结论仍会在重算时整组生效，只是不在这份列表里，也无法在这里撤回——
+          这不是"没有更早的结论"，别把它当成可以重新判定的依据。
+        </p>
+        <ul v-if="assistDismissals.length" class="assist-list">
+          <li v-for="item in assistDismissals" :key="item.id" class="assist-row">
+            <strong>{{ assistKindLabel(item.kind) }}</strong>
+            <span class="assist-field">{{ item.group_key }}</span>
+            <span class="assist-wording">{{ item.note || '（无备注）' }}</span>
+            <span class="assist-gate">{{ item.decided_by_name || '判定人已不在' }} · {{ item.created }}</span>
+            <button type="button" class="btn btn-sm btn-secondary" :disabled="assistBusy" @click="revokeDismissal(item)">撤回</button>
+          </li>
+        </ul>
+        <p v-else class="text-muted assist-empty">还没有把任何分组标为「不是冲突」。</p>
+      </section>
     </template>
+
+    <AppModal
+      :open="Boolean(qualityTarget)"
+      title-id="quality-state-dialog-title"
+      @close="closeQualityDialog"
+    >
+      <h3 id="quality-state-dialog-title">设置条目质量状态</h3>
+      <p class="text-sm text-muted">
+        第 {{ qualityTarget?.page_number }} 条 · 当前「{{ qualityStateLabel(qualityTarget?.quality_state) }}」
+      </p>
+      <label class="form-group">
+        <span class="form-label">目标状态</span>
+        <select v-model="qualityDraftState" class="form-control">
+          <option v-for="option in qualityStateOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <p class="text-sm text-muted">{{ QUALITY_STATE_HINTS[qualityDraftState] }}</p>
+      <label class="form-group">
+        <span class="form-label">依据{{ qualityBasisRequired ? '（必填）' : '（可留空）' }}</span>
+        <textarea v-model="qualityDraftBasis" class="form-control" rows="3" maxlength="500"></textarea>
+      </label>
+      <div v-if="qualityDialogError" class="alert alert-error" role="alert">{{ qualityDialogError }}</div>
+      <template #actions>
+        <button type="button" class="btn btn-secondary" :disabled="qualitySubmitting" @click="closeQualityDialog">取消</button>
+        <button type="button" class="btn btn-primary" :disabled="qualitySubmitDisabled" @click="submitQualityChange">
+          {{ qualitySubmitting ? '保存中...' : '保存' }}
+        </button>
+      </template>
+    </AppModal>
   </main>
 </template>
 
@@ -441,16 +646,52 @@ import {
   reorderPendingPages
 } from '@/services/pagesService'
 import { createProjectPdf, getProjectFile, listProjectPdfUploads, cancelProjectPdfUpload } from '@/services/projectFilesService'
+import {
+  EMPTY_MESSAGES,
+  SEVERITY_LABELS,
+  emptyReason,
+  findingLocator,
+  findingSpanText,
+  gatedOffNotice,
+  gatedOffSplit,
+  kindBreakdown,
+  recomputeNotice,
+  severityCount,
+  truncatedNotice
+} from '@/lib/assistOverview'
+import { hintKindLabel } from '@/lib/fieldHints'
+import { renderFindingMessage } from '@/lib/findingMessages'
+import {
+  listProjectDismissals,
+  listProjectFindings,
+  recomputeProjectFindings,
+  recomputeProjectIdentity,
+  revokeGroupDismissal
+} from '@/services/assistService'
 import { validatePdfFile, loadPdfUploadResume, clearPdfUploadResume } from '@/lib/chunkedPdfUpload'
+import { BUCKET_LABELS, canSubmit as canSubmitBlocked, conclusionState, conclusionSummary } from '@/lib/blockedReason'
+import { clearBlockedReason, getBlockedReason, setBlockedReason } from '@/services/blockedReasonService'
+import { useAuthStore } from '@/stores/auth'
 import { currentUserId } from '@/services/authService'
 import { commitCsvImport, createCsvInspection, getImportJob, listImportJobErrors, startOcr } from '@/services/importJobsService'
 import { csvFatalMessage, parseCsvInspection } from '@/lib/csvInspection'
 import { toSafeCsvCell } from '@/lib/csvExport'
 import { getProject } from '@/services/projectsService'
+import { getProjectQualitySummary, setPageQualityState } from '@/services/qualityStateService'
+import { QUALITY_STATES, QUALITY_STATE_LABELS, QUALITY_STATE_HINTS, QUALITY_STATE } from '@/constants/qualityState'
+import {
+  normalizeQualityState,
+  qualityStateBadgeClass,
+  qualityStateLabel,
+  qualityStateNeedsBasis,
+  qualityStateSummaryRows
+} from '@/lib/qualityState'
+import AppModal from '@/components/AppModal.vue'
 import { getPbMessage, getPbStatus, getUploadErrorMessage, isRetryablePdfUploadError } from '@/utils/pbErrors'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const projectId = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id
 const ACTIVE_STATUS_FILTER = 'active'
 const initialStatus = Array.isArray(route.query.status) ? route.query.status[0] : route.query.status
@@ -508,10 +749,26 @@ const selectedStatus = ref(
 )
 const currentListPage = ref(1)
 const listPageSize = ref(25)
+const selectedQualityState = ref('')
+const qualitySummary = ref(null)
+const qualitySummaryError = ref('')
+const qualityTarget = ref(null)
+const qualityDraftState = ref(QUALITY_STATE.VALIDATED)
+const qualityDraftBasis = ref('')
+const qualitySubmitting = ref(false)
+const qualityDialogError = ref('')
 let pdfPollGeneration = 0
 let csvPollGeneration = 0
 
 const statusOptions = Object.entries(PAGE_STATUS_LABELS).map(([value, label]) => ({ value, label }))
+const qualityStateOptions = QUALITY_STATES.map((value) => ({ value, label: QUALITY_STATE_LABELS[value] }))
+const qualitySummaryRows = computed(() => qualityStateSummaryRows(qualitySummary.value))
+// 这里只挡「目标需要依据而依据为空」。同值写入**不**在按钮上挡：它由服务端拒绝
+// （同值写入会刷新审计三列，见 backend/quality_state.go），界面负责把那条理由显示出来——
+// backend/tests/quality_state_browser.cjs 的第 4 步正是走这条路径截的图，删掉服务端那半边会让它失去意义。
+const qualityBasisRequired = computed(() => qualityStateNeedsBasis(qualityDraftState.value))
+const qualitySubmitDisabled = computed(() =>
+  qualitySubmitting.value || (qualityBasisRequired.value && !qualityDraftBasis.value.trim()))
 
 const approvedPct = computed(() => pageStats.value.completionPct)
 
@@ -519,7 +776,7 @@ const filteredPages = computed(() => pages.value)
 const listPagination = computed(() => ({ page: currentListPage.value, perPage: listPageSize.value, totalItems: totalFilteredItems.value, totalPages: serverTotalPages.value }))
 const displayedPages = computed(() => pages.value)
 const displayedPageOffset = computed(() => (currentListPage.value - 1) * listPageSize.value)
-const hasActiveListFilter = computed(() => Boolean(searchQuery.value.trim() || selectedStatus.value || minPdfPage.value || maxPdfPage.value))
+const hasActiveListFilter = computed(() => Boolean(searchQuery.value.trim() || selectedStatus.value || selectedQualityState.value || minPdfPage.value || maxPdfPage.value))
 const allPendingSelected = computed(() => {
   return pageStats.value.unstarted > 0 && selectedPendingIds.value.length === pageStats.value.unstarted
 })
@@ -550,7 +807,7 @@ const ocrJobStatusLabel = computed(() => ({
 const csvPreviewHeaders = computed(() => csvInspection.value?.headers.slice(0, 6) || [])
 const pdfResumeExpired = computed(() => Boolean(pdfResume.value?.expired))
 
-watch([searchQuery, selectedStatus, listPageSize, minPdfPage, maxPdfPage], () => {
+watch([searchQuery, selectedStatus, selectedQualityState, listPageSize, minPdfPage, maxPdfPage], () => {
   currentListPage.value = 1
   clearTimeout(searchTimer)
   searchTimer = setTimeout(loadPages, 200)
@@ -583,7 +840,7 @@ onMounted(async () => {
     return
   }
   loadingProject.value = false
-  await Promise.all([loadPages(), loadPdfResume()])
+  await Promise.all([loadPages(), loadQualitySummary(), loadPdfResume()])
   if (selectedStatus.value) {
     await nextTick()
     scrollToEntries()
@@ -606,6 +863,7 @@ async function loadPages() {
     const result = await listAdminProjectPages(projectId, {
       page: currentListPage.value, perPage: listPageSize.value,
       q: searchQuery.value, status: selectedStatus.value,
+      qualityState: selectedQualityState.value,
       minPage: minPdfPage.value, maxPage: maxPdfPage.value
     })
     if (generation !== pageLoadGeneration) return
@@ -627,11 +885,67 @@ async function operationRows() {
   try { return await listAllProjectPages(projectId, { fields: 'id,status,page_number', sort: 'page_number,id' }) } finally { mutatingRows.value = false }
 }
 
+// 汇总单独一次请求，不与条目分页耦合：切页不该重算汇总，改动状态才该。
+async function loadQualitySummary() {
+  try {
+    qualitySummary.value = await getProjectQualitySummary(projectId)
+    qualitySummaryError.value = ''
+  } catch (e) {
+    qualitySummary.value = null
+    qualitySummaryError.value = getPbMessage(e, '质量状态汇总加载失败。')
+  }
+}
+
+function openQualityDialog(page) {
+  qualityTarget.value = page
+  qualityDialogError.value = ''
+  qualityDraftBasis.value = ''
+  const current = normalizeQualityState(page.quality_state)
+  qualityDraftState.value = current === QUALITY_STATE.VALIDATED ? QUALITY_STATE.WITHHELD : QUALITY_STATE.VALIDATED
+}
+
+function closeQualityDialog() {
+  qualityTarget.value = null
+  qualitySubmitting.value = false
+}
+
+async function submitQualityChange() {
+  if (!qualityTarget.value || qualitySubmitDisabled.value) return
+  qualitySubmitting.value = true
+  qualityDialogError.value = ''
+  try {
+    const updated = await setPageQualityState(projectId, qualityTarget.value.id, {
+      state: qualityDraftState.value,
+      basis: qualityDraftBasis.value.trim()
+    })
+    const index = pages.value.findIndex((page) => page.id === qualityTarget.value.id)
+    if (index >= 0) {
+      pages.value[index] = {
+        ...pages.value[index],
+        quality_state: updated.qualityState,
+        quality_state_by: updated.qualityBy,
+        quality_state_at: updated.qualityAt,
+        quality_state_basis: updated.qualityBasis
+      }
+    }
+    mutationSuccess.value = `第 ${qualityTarget.value.page_number} 条已标为「${qualityStateLabel(updated.qualityState)}」。`
+    closeQualityDialog()
+    await loadQualitySummary()
+  } catch (e) {
+    // 状态转移的裁决只在服务端（backend/quality_state.go），这里原样显示它的理由，
+    // 不在前端复算一遍规则——复算会漂，而漂了的症状是「界面允许、后端 400」。
+    qualityDialogError.value = getPbMessage(e, '保存质量状态失败，请稍后重试。')
+  } finally {
+    qualitySubmitting.value = false
+  }
+}
+
 function resetListFilters() {
   searchQuery.value = ''
   minPdfPage.value = ''
   maxPdfPage.value = ''
   selectedStatus.value = ''
+  selectedQualityState.value = ''
   currentListPage.value = 1
   syncStatusQuery('')
 }
@@ -872,7 +1186,9 @@ async function confirmCsvImport() {
       csvImportErrors.value = result.items
     }
     selectedPendingIds.value = []
-    await loadPages()
+    // 导入会改变条目总数，汇总必须跟着走：只刷表格的话，三枚分桶芯片与「共 N 条」
+    // 会停在旧数字上，与正下方刚刷新出来的表格对不上账（#172 验收第 4 条问的就是这个数）。
+    await Promise.all([loadPages(), loadQualitySummary()])
   } catch (e) {
     csvError.value = getPbMessage(e, '确认导入失败，请稍后重试。')
   } finally {
@@ -1101,7 +1417,8 @@ async function deleteSelectedRows() {
   try {
     await deletePendingPages(projectId, selectedPendingIds.value)
     selectedPendingIds.value = []
-    await loadPages()
+    // 同上：删除同样改变条目总数，汇总不跟着走就会与表格对不上账。
+    await Promise.all([loadPages(), loadQualitySummary()])
     mutationSuccess.value = `已删除 ${deleteCount} 条待校对条目，并重新整理条号。`
   } catch (e) {
     mutationError.value = getPbMessage(e, '批量删除失败，请重试')
@@ -1115,5 +1432,249 @@ function formatItemNo(pageNumber, fallbackIndex) {
   if (Number.isFinite(n) && n > 0) return Math.floor(n)
   return fallbackIndex + 1
 }
+
+// ---------- #234 机器疑点区块 ----------
+const assistRows = ref([])
+const assistDismissals = ref([])
+const assistPage = ref(1)
+const assistHasMore = ref(false)
+// 两个截断信号各一个 ref。合成一个是 #235 的评审阻断项：
+// findings 侧每次读取都会无条件覆写那个共享 ref，翻页/筛选/重算都会把
+// "人工结论被截断"的告警凭空冲掉，而列表里那 200 条以外的结论还在生效。
+const assistFindingsNotice = ref('')
+const assistDismissalsTruncated = ref(false)
+const assistKind = ref('')
+const assistBusy = ref(false)
+const assistNotice = ref('')
+const assistError = ref('')
+// "跑过没有"只能记在这次会话里：后端没有"这个项目是否算过"的字段，
+// 而把空列表说成"没有疑点"正是本区块要避免的那次误读。
+// 两类重算各记各的：只跑跨行身份时，列级/页级判据仍然没算过，空态不能说"干净"。
+const assistRuns = ref({ rules: false, identity: false })
+const assistPagesScanned = ref(null)
+
+const assistKinds = computed(() => kindBreakdown(assistRows.value))
+const assistStrong = computed(() => severityCount(assistRows.value, 'strong'))
+const assistWarn = computed(() => severityCount(assistRows.value, 'warn'))
+const assistInfo = computed(() => severityCount(assistRows.value, 'info'))
+const assistGatedOff = computed(() => gatedOffSplit(assistRows.value))
+const assistGatedOffText = computed(() => gatedOffNotice(assistGatedOff.value))
+const assistEmptyText = computed(() => EMPTY_MESSAGES[emptyReason({
+  items: assistRows.value,
+  runs: assistRuns.value,
+  pagesScanned: assistPagesScanned.value
+})])
+// 每行的定位串只算一次：模板里 v-for 每行要用三次（条目号 / PDF 页 / 命中区间）。
+const assistViewRows = computed(() => assistRows.value.map((row) => ({
+  row,
+  locator: findingLocator(row),
+  span: findingSpanText(row)
+})))
+
+// 「只看这页」走条目列表已有的 PDF 页范围精确过滤（min/max 同一个数），
+// 而不是把条目号塞进 q——q 是对正文的子串匹配，跳某一条会连带命中别条。
+async function jumpToEntryPage(view) {
+  const page = view?.locator?.pdfPage
+  if (!Number.isInteger(page)) return
+  minPdfPage.value = String(page)
+  maxPdfPage.value = String(page)
+  await nextTick()
+  scrollToEntries()
+}
+
+function assistKindLabel(kind) {
+  return hintKindLabel(kind)
+}
+
+function assistSeverityLabel(severity) {
+  return SEVERITY_LABELS[severity] ?? severity ?? '未知等级'
+}
+
+function assistWording(row) {
+  return renderFindingMessage(row?.message)
+}
+
+async function loadAssistFindings() {
+  assistError.value = ''
+  try {
+    const view = await listProjectFindings(projectId, { kind: assistKind.value, page: assistPage.value })
+    assistRows.value = view.items ?? []
+    assistHasMore.value = !!view.hasMore
+    // 只认后端明说的截断信号；文案由 assistOverview 的 truncatedNotice 生成，
+    // 不在 UI 里另写一句（#235 评审：那句手写的告警与测试钉住的 helper 是两套，
+    // 而 helper 在 frontend/src 里零消费）。
+    assistFindingsNotice.value = truncatedNotice({
+      gate_rows_truncated: view.gate_rows_truncated,
+      hasMore: view.hasMore
+    })
+  } catch (e) {
+    assistError.value = `疑点列表读取失败：${e?.message ?? e}`
+  }
+}
+
+async function loadAssistDismissals() {
+  try {
+    const view = await listProjectDismissals(projectId)
+    assistDismissals.value = view.items ?? []
+    // 后端只回最近 200 条：被截断时说的是"人工结论"这件事，与疑点列表/门控表无关。
+    assistDismissalsTruncated.value = !!view.truncated
+  } catch (e) {
+    assistError.value = `人工结论读取失败：${e?.message ?? e}`
+  }
+}
+
+async function runFindingsRecompute() {
+  if (assistBusy.value) return
+  assistBusy.value = true
+  assistError.value = ''
+  try {
+    const summary = await recomputeProjectFindings(projectId)
+    assistRuns.value = { ...assistRuns.value, rules: true }
+    assistPagesScanned.value = Number.isFinite(summary?.pages) ? summary.pages : null
+    assistNotice.value = recomputeNotice(summary)
+    assistPage.value = 1
+    await loadAssistFindings()
+  } catch (e) {
+    assistError.value = `重算失败：${e?.message ?? e}`
+  } finally {
+    assistBusy.value = false
+  }
+}
+
+async function runIdentityRecompute() {
+  if (assistBusy.value) return
+  assistBusy.value = true
+  assistError.value = ''
+  try {
+    const summary = await recomputeProjectIdentity(projectId)
+    // 只标 identity：跨行重算不刷新列级/页级判据，也不刷 tier
+    assistRuns.value = { ...assistRuns.value, identity: true }
+    assistPagesScanned.value = Number.isFinite(summary?.pages) ? summary.pages : null
+    assistNotice.value = recomputeNotice(summary, { identity: true })
+    assistPage.value = 1
+    await loadAssistFindings()
+  } catch (e) {
+    assistError.value = `跨行重算失败：${e?.message ?? e}`
+  } finally {
+    assistBusy.value = false
+  }
+}
+
+function stepAssistPage(delta) {
+  const next = assistPage.value + delta
+  if (next < 1) return
+  assistPage.value = next
+  loadAssistFindings()
+}
+
+function clearAssistKind() {
+  assistKind.value = ''
+  assistPage.value = 1
+  loadAssistFindings()
+}
+
+// 筛选值由 v-model 先进 assistKind，这里只负责回到第一页重读。
+// 选项只列"本页有的 kind"：全量 kind 词表归后端所有，前端复制一份就会各自漂移。
+function applyAssistKindFilter() {
+  assistPage.value = 1
+  loadAssistFindings()
+}
+
+async function revokeDismissal(item) {
+  if (assistBusy.value) return
+  assistBusy.value = true
+  assistError.value = ''
+  try {
+    await revokeGroupDismissal(projectId, item.id)
+    assistNotice.value = '人工结论已撤回（物理删除，不留痕）；下次跨行重算会重新报出这一组。'
+    await loadAssistDismissals()
+  } catch (e) {
+    assistError.value = `撤回失败：${e?.message ?? e}`
+  } finally {
+    assistBusy.value = false
+  }
+}
+
+// ---------- #240 条目阻塞结论区块 ----------
+// 只有平台管理员能看到这一节（口径由维护者在 #240 上定为 B）：区块所在的「机器疑点」
+// 是 canManage 门禁，比平台管理员宽，所以这里必须再套一层 isPlatformAdmin，
+// 否则项目管理员会看见一组点了就 403 的控件。
+const blockedPageId = ref('')
+const blockedRecord = ref(null)
+const blockedForm = ref({ reason: '', basis: '' })
+const blockedBusy = ref(false)
+const blockedError = ref('')
+const blockedTier = ref('')
+const blockedTierBasis = ref('')
+
+const blockedState = computed(() => conclusionState(blockedRecord.value))
+const blockedConclusionText = computed(() => conclusionSummary(blockedRecord.value))
+const blockedCanSubmit = computed(() => canSubmitBlocked(blockedForm.value))
+
+function blockedMessage(error) {
+  return getPbMessage(error) || error?.message || String(error)
+}
+
+async function loadBlockedConclusion() {
+  blockedError.value = ''
+  blockedRecord.value = null
+  blockedForm.value = { reason: '', basis: '' }
+  blockedTier.value = ''
+  blockedTierBasis.value = ''
+  if (!blockedPageId.value) return
+  try {
+    blockedRecord.value = await getBlockedReason(blockedPageId.value)
+  } catch (error) {
+    blockedError.value = `读取失败：${blockedMessage(error)}`
+  }
+}
+
+// 写完一律重新读一次再显示：面板上那行结论必须是服务端此刻的值，
+// 不是 PUT/DELETE 的回显——两者不一致时，回显会让一个坏掉的值域看起来是成功的。
+async function reloadBlockedConclusion(result) {
+  const tier = result?.difficulty_tier ?? ''
+  const basis = result?.difficulty_basis ?? ''
+  await loadBlockedConclusion()
+  blockedTier.value = tier
+  blockedTierBasis.value = basis
+  await loadPages()
+}
+
+async function saveBlockedConclusion() {
+  if (blockedBusy.value || !blockedCanSubmit.value) return
+  blockedBusy.value = true
+  blockedError.value = ''
+  try {
+    await reloadBlockedConclusion(await setBlockedReason(blockedPageId.value, { ...blockedForm.value }))
+  } catch (error) {
+    blockedError.value = `登记失败：${blockedMessage(error)}`
+  } finally {
+    blockedBusy.value = false
+  }
+}
+
+// 撤销必须只针对"这条已经有结论"：把空串当一次 DELETE 发出去，
+// 症状是清掉了别人的值（选错条目时），而不是什么都没发生。
+async function clearBlockedConclusion() {
+  if (blockedBusy.value || blockedState.value === 'unset') return
+  blockedBusy.value = true
+  blockedError.value = ''
+  try {
+    await reloadBlockedConclusion(await clearBlockedReason(blockedPageId.value))
+  } catch (error) {
+    blockedError.value = `撤销失败：${blockedMessage(error)}`
+  } finally {
+    blockedBusy.value = false
+  }
+}
+
+watch(
+  () => project.value?.capabilities?.canManage,
+  (manageable) => {
+    if (!manageable) return
+    loadAssistFindings()
+    loadAssistDismissals()  },
+  { immediate: true }
+)
 
 </script>

@@ -106,8 +106,14 @@
               :disabled="claimingProject === queue.project.id"
               @click="enterProject(queue, option.key)"
             >{{ option.label }} · {{ option.count }}</button>
+            <span v-if="tierUnknown(queue)" class="queue-tier queue-tier--muted">
+              信号不足 {{ tierUnknown(queue) }}
+            </span>
             <span v-if="tierUnlabeled(queue)" class="queue-tier queue-tier--muted">
               未评估 {{ tierUnlabeled(queue) }}
+            </span>
+            <span v-if="tierResidual(queue)" class="queue-tier queue-tier--warn" role="status">
+              {{ tierResidualText(queue) }}
             </span>
           </div>
 
@@ -224,6 +230,21 @@ function tierRows(queue) {
 
 function tierUnlabeled(queue) {
   return tierBreakdown(queue)?.unlabeledCount ?? 0
+}
+
+// #247：unknown（算过但信号不足）与 unlabeled（从没算过）是两件事，
+// 必须各说各的——合成一句"没层级"会让人以为再等等就有了。
+function tierUnknown(queue) {
+  return tierBreakdown(queue)?.unknownCount ?? 0
+}
+
+function tierResidual(queue) {
+  return tierBreakdown(queue)?.residual ?? 0
+}
+
+function tierResidualText(queue) {
+  const gap = tierResidual(queue)
+  return gap > 0 ? `另有 ${gap} 条未落任何档` : `分层计数比可领取多 ${-gap} 条`
 }
 
 function progressPct(queue) {

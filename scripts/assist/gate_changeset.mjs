@@ -17,15 +17,12 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const gateRelease = require('../../backend/pb_hooks/lib/gate_release.js')
 const rules = require('../../backend/pb_hooks/lib/assist_rules.js')
+const coverage = require('../../backend/pb_hooks/lib/rule_coverage.js')
 
-// 弱标注粒度 `(提交, 字段)` 度量不到的判据必须点名，不能沉默成「没进变更集」。
+// 弱标注粒度度量不到的判据必须点名，不能沉默成「没进变更集」。
+// 这份清单**不在这里维护**：它与"哪些判据能打分"是同一张表的正反面，
+// 定义在 backend/pb_hooks/lib/rule_coverage.js，与管理端措辞共用（#254）。
 // 口径与 scripts/assist/README.md §4、labeling.mjs 的 defaultRuleSet 注释一致。
-const NOT_SCOREABLE = [
-  { rule: 'R3 mixed_normalization_forms', reason: '列级判据，弱标注按字段对齐，看不见整列' },
-  { rule: 'R4 punctuation_mix', reason: '列级判据，同上' },
-  { rule: 'R7 page_outlier', reason: '页级/项目级判据，需要整批分布' },
-  { rule: 'R7 row_shape_outlier', reason: '页级/项目级判据，需要整批分布' }
-]
 
 export function buildChangeset(scoreResult, { approvedBy, approvedAt, producerVersion, changesetId }) {
   const scored = Array.isArray(scoreResult?.scored) ? scoreResult.scored : []
@@ -39,6 +36,9 @@ export function buildChangeset(scoreResult, { approvedBy, approvedAt, producerVe
     if (suggested === 'off') {
       excluded.push({
         rule: item.rule, kind: item.kind, message_key: item.message_key,
+        // 三栏的完整性检查按通道身份比对，少了这一项，"保持 off"那一栏
+        // 的每一条都会被算成"没出现在任何一栏里"，正常一轮打分也会炸。
+        producer_version: producerVersion,
         gate: 'off', reason: `${item.gate.basis}${item.gate.note ? `；${item.gate.note}` : ''}`
       })
       continue
@@ -59,8 +59,35 @@ export function buildChangeset(scoreResult, { approvedBy, approvedAt, producerVe
       approved_at: approvedAt
     })
   }
-  for (const item of NOT_SCOREABLE) {
-    excluded.push({ rule: item.rule, gate: 'off', reason: `${item.reason}——本变更集无证据范围` })
+  // 「无通道」不进 excluded：那一栏的语义是"有通道、这轮证据不够"，混在一起
+  // 就等于把"永远不会有档位"写成"再等等"——正是 #254 报的那句误导。
+  const noChannel = coverage.UNSCORED.map((item) => ({
+    producer_version: item.producer_version,
+    kind: item.kind,
+    message_key: item.message_key,
+    rule: item.rule,
+    reason: item.reason
+  }))
+  // 三栏之和必须等于表上登记的全部可打分身份：漏在哪一栏，哪一栏就沉默。
+  // 期望集合按本轮作用域算——没给列角色时 R5 本就不该出现，
+  // 而"这一轮到底给没给角色"只有打分侧知道，所以它必须如实标在产物里。
+  const rolesInScope = scoreResult?.scope_roles
+  if (typeof rolesInScope !== 'boolean') {
+    throw new Error('打分产物缺少 scope_roles：请用当前版本的 score_rules.mjs 重新产出 --json。' +
+      '缺了它就无法判断"某条可打分判据没出现在报告里"是漏了，还是本来不在本轮作用域内。')
+  }
+  const listed = new Set([
+    ...entries.map(coverage.keyOf),
+    ...excluded.map(coverage.keyOf),
+    ...noChannel.map(coverage.keyOf)
+  ])
+  const silent = coverage.SCORED
+    .filter((item) => !item.requires_roles || rolesInScope)
+    .filter((item) => !listed.has(coverage.keyOf(item)))
+    .map((item) => `${item.rule}(${item.message_key})`)
+  if (silent.length) {
+    throw new Error(`打分报告漏了 ${silent.length} 条在作用域内的可打分判据，` +
+      `它们既不在建议放行也不在保持 off：${silent.join('、')}`)
   }
   return {
     changeset: changesetId,
@@ -72,8 +99,10 @@ export function buildChangeset(scoreResult, { approvedBy, approvedAt, producerVe
     criteria_source: 'docs/plans/2026-09-25-assist-rule-thresholds.md §2/§5（代码侧唯一出处 backend/pb_hooks/lib/gate_release.js）',
     // 报告的「能否外推」纪律同样适用于变更集：合成样本产出的档位不能当作线上精度承诺。
     extrapolation: scoreResult?.synthetic ? '本变更集的数字来自合成弱标注样本，只用于打通放行通道与验证判据行为，不构成线上准确率结论。' : '本变更集的数字来自库内真实样本。',
+    coverage_source: 'backend/pb_hooks/lib/rule_coverage.js（可打分 / 无打分通道两类的唯一定义）',
     entries,
-    excluded
+    excluded,
+    no_channel: noChannel
   }
 }
 
@@ -104,6 +133,18 @@ function renderMarkdown(changeset) {
   lines.push('| 规则 | 理由 |')
   lines.push('| --- | --- |')
   for (const e of changeset.excluded) lines.push(`| ${e.rule} | ${e.reason} |`)
+  lines.push('')
+  lines.push('## 无打分通道（点名：不是"再等等"，是现有通道永远不会有档位）')
+  lines.push('')
+  lines.push('> 这些身份在库里照样产出、照样计入管理端"校对员看不到"的条数，但弱标注的')
+  lines.push('> `(提交, 字段)` 粒度量不到它们的精度，所以既进不了上面的表，也不该被写成"尚未放行"。')
+  lines.push('> 出处：' + changeset.coverage_source)
+  lines.push('')
+  lines.push('| 规则 | kind / message_key | 为什么量不到 |')
+  lines.push('| --- | --- | --- |')
+  for (const e of changeset.no_channel) {
+    lines.push(`| ${e.rule} | ${e.kind} / ${e.message_key} | ${e.reason} |`)
+  }
   lines.push('')
   lines.push('> 本文件是待评审产物。应用它需要平台管理员调用 `POST /api/fangji/gates/changeset`；')
   lines.push('> 应用侧会用同一份判据复核，判据不满足的条目逐条拒绝。')
@@ -136,7 +177,8 @@ function main() {
   if (values.out) writeFileSync(values.out, json)
   else process.stdout.write(json)
   if (values.report) writeFileSync(values.report, renderMarkdown(changeset))
-  console.error(`变更集 ${changeset.changeset}: 建议放行 ${changeset.entries.length} 条，保持 off ${changeset.excluded.length} 条。本命令不写库。`)
+  console.error(`变更集 ${changeset.changeset}: 建议放行 ${changeset.entries.length} 条，保持 off ${changeset.excluded.length} 条，` +
+    `无打分通道 ${changeset.no_channel.length} 条（点名，不进变更集）。本命令不写库。`)
   return 0
 }
 

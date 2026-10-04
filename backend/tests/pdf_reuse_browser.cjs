@@ -7,7 +7,7 @@ const fixture = JSON.parse(fs.readFileSync(process.env.PDF_BROWSER_FIXTURE))
 const dist = path.resolve(__dirname, '../../frontend/dist')
 const csp = fs.readFileSync(path.resolve(__dirname, '../../frontend/nginx.conf'), 'utf8').match(/add_header Content-Security-Policy "([^"]+)"/)[1]
 ;(async () => {
- const browser = await chromium.launch({ headless:true, ...(process.env.BROWSER_CHANNEL ? {channel:process.env.BROWSER_CHANNEL} : {}) })
+ const browser = await chromium.launch({ headless:true, ...(process.env.BROWSER_EXECUTABLE ? {executablePath:process.env.BROWSER_EXECUTABLE} : {}), ...(process.env.BROWSER_CHANNEL ? {channel:process.env.BROWSER_CHANNEL} : {}) })
  try {
   const page = await browser.newPage({viewport:{width:1440,height:900}})
   const errors=[], downloads=[], descriptors=[]
@@ -17,6 +17,8 @@ const csp = fs.readFileSync(path.resolve(__dirname, '../../frontend/nginx.conf')
    const req=route.request(), url=new URL(req.url())
    assert.equal(url.origin,'http://localhost')
    if(url.pathname.startsWith('/api/')) {
+    // Keep this regression on the PDF degradation path; images have their own suite.
+    if(url.pathname.includes('/images/')) return route.fulfill({status:404,json:{message:'PDF fallback fixture'}})
     if(/\/pdf$/.test(url.pathname)) downloads.push(url.pathname)
     if(/\/pdf\/descriptor$/.test(url.pathname)) descriptors.push(url.pathname)
     if(rejectRenewal && url.pathname.endsWith('/lease/renew')) return route.fulfill({status:403,json:{message:'任务租约已失效，请重新领取'}})

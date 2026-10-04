@@ -16,6 +16,16 @@ and checks source-page mapping instead of requesting original file URLs. Screens
 Native iOS/Android keyboard behavior still requires device testing; desktop viewport
 emulation cannot verify the operating system's keyboard or IME.
 
+Run `node tests/browser/modal.cjs` against the same Vite server for submission
+confirmation regression coverage. It mounts both real review views with synthetic
+API responses and checks desktop/mobile Tab and Shift+Tab loops (eight presses
+each), Escape/cancel/backdrop dismissal, background scroll locking, focus return
+to each trigger, and arbitration's unresolved-field gate. It also verifies that
+reviewing and dismissing never submits a record. Screenshots of both dialogs and
+the restored trigger are saved in `output/playwright/modal` at the repository root.
+Set `MODAL_SCREENSHOTS` to change this directory, `REVIEW_BASE_URL` to change the
+server URL, or `BROWSER_CHANNEL=msedge` to use installed Edge on Windows.
+
 The suite also loads the real shipped preset in desktop/mobile proofreading and
 arbitration: an exact combining tilde, its dotted-circle label, and both tortoise
 shell brackets are inserted at the saved caret. Synthetic screenshots are saved

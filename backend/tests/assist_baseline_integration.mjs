@@ -261,16 +261,80 @@ const disk = new DatabaseSync(dbPath)
 disk.exec(`CREATE TABLE pages (id TEXT PRIMARY KEY, project TEXT, proofread_row_json TEXT, status TEXT)`)
 disk.exec(`CREATE TABLE proofreading_attempts (id TEXT PRIMARY KEY, page TEXT, project TEXT,
   round INTEGER, pass_no INTEGER, kind TEXT, proofreader TEXT, row_json TEXT, submitted_at TEXT)`)
+disk.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, column_roles_json TEXT)`)
 disk.close()
-assert.deepEqual(loadFromSqlite(dbPath), { pages: [], attempts: [] }, '空库应读到空集合而不是报错')
+assert.deepEqual(loadFromSqlite(dbPath), { pages: [], attempts: [], roles: null, rolesConflict: false },
+  '空库应读到空集合而不是报错')
 unlinkSync(dbPath)
 unlinkSync(exportPath)
+
+// 列角色从库里读：三份库三种情形，各自都必须落到报告能分辨的值上。
+// 这里刻意把"没有 projects 表"也测一遍——裁剪过的只读副本是这个工具最常见的输入，
+// 读不到列角色要降级成 null，而不是让整个打分器崩在 prepare() 上。
+function datasetFrom(projects) {
+  const file = path.join(tmpdir(), `assist-roles-${Date.now()}-${Math.random().toString(16).slice(2)}.db`)
+  const handle = new DatabaseSync(file)
+  handle.exec(`CREATE TABLE pages (id TEXT PRIMARY KEY, project TEXT, proofread_row_json TEXT, status TEXT)`)
+  handle.exec(`CREATE TABLE proofreading_attempts (id TEXT PRIMARY KEY, page TEXT, project TEXT,
+    round INTEGER, pass_no INTEGER, kind TEXT, proofreader TEXT, row_json TEXT, submitted_at TEXT)`)
+  handle.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, column_roles_json TEXT)`)
+  for (const [id, roles] of projects) {
+    handle.prepare('INSERT INTO projects VALUES (?, ?)').run(id, roles)
+  }
+  handle.close()
+  try {
+    return loadFromSqlite(file)
+  } finally {
+    unlinkSync(file)
+  }
+}
+const rolesMap = { 词条: 'headword', 仙游IPA: 'reading', 释义: 'meaning' }
+assert.deepEqual(datasetFrom([['p1', JSON.stringify(rolesMap)]]).roles, rolesMap,
+  '库内登记过列角色时，--db 必须把它读出来，否则 R5 会静默不参与打分')
+assert.equal(datasetFrom([['p1', JSON.stringify(rolesMap)]]).rolesConflict, false)
+assert.deepEqual(datasetFrom([['p1', ''], ['p2', 'not json']]).roles, null,
+  '空串与坏 JSON 都视同没标，不许当成角色映射喂给规则引擎')
+// 多项目且列角色不同：不挑一个用。挑了就等于用 A 项目的必填列去评 B 项目的数据。
+const mixed = datasetFrom([['p1', JSON.stringify(rolesMap)], ['p2', JSON.stringify({ 词条: 'headword' })]])
+assert.equal(mixed.rolesConflict, true)
+assert.equal(mixed.roles, null)
+// 同一份列角色登记在两个项目上仍然是"一致"，比较的是内容而不是项目数。
+assert.equal(datasetFrom([['p1', JSON.stringify(rolesMap)], ['p2', JSON.stringify(rolesMap)]]).rolesConflict, false)
+const noProjectsTable = new DatabaseSync(':memory:')
+noProjectsTable.exec(`CREATE TABLE pages (id TEXT PRIMARY KEY, project TEXT, proofread_row_json TEXT, status TEXT)`)
+noProjectsTable.exec(`CREATE TABLE proofreading_attempts (id TEXT PRIMARY KEY, page TEXT, project TEXT,
+  round INTEGER, pass_no INTEGER, kind TEXT, proofreader TEXT, row_json TEXT, submitted_at TEXT)`)
+assert.deepEqual(readDataset(noProjectsTable).roles, null, '没有 projects 表的副本要降级成未提供而不是抛错')
+assert.equal(readDataset(noProjectsTable).rolesConflict, false)
+noProjectsTable.close()
+// R5 在不在打分清单里，完全由 roles 决定：这条断言钉住"少一条规则"的两种边界。
+assert.equal(defaultRuleSet({ keyboards: [{ definition: keyboard }], roles: rolesMap })
+  .some((rule) => rule.name.startsWith('R5')), true)
+assert.equal(defaultRuleSet({ keyboards: [{ definition: keyboard }], roles: null })
+  .some((rule) => rule.name.startsWith('R5')), false)
 
 // ---------- 真库形状：用 PocketBase 的真实列建记录再读回，防止列名写错而静默空跑 ----------
 const project = await request('/api/fangji/projects', {
   method: 'POST', token: platformAuth.token, expected: 201,
   body: { name: `assist-baseline-${Date.now()}` }
 })
+const liveProject = await request(`/api/collections/projects/records/${project.id}`, { token: superAuth.token })
+assert.equal('column_roles_json' in liveProject, true,
+  'readDataset 读的是 projects.column_roles_json，真库这一列改名/漏建时必须在这里红')
+const savedRoles = await request(`/api/fangji/projects/${project.id}/column-roles`, {
+  method: 'PUT', token: platformAuth.token,
+  body: { roles: { 词条: 'headword', 莆田IPA: 'reading', 释义: 'meaning' } }
+})
+// 项目还没有条目 ⇒ 视图拿不到表头，每一列都会被报成 stale / present:false。
+// 这条断言钉的是"stale 不等于没标"：存储映射必须原样还在，规则引擎按每行自己的列名用它。
+assert.deepEqual([...savedRoles.stale].sort(), ['莆田IPA', '词条', '释义'].sort(),
+  `没有表头时视图应把三列都列为 stale：${JSON.stringify(savedRoles)}`)
+assert.equal(savedRoles.columns.every((column) => column.present === false), true)
+assert.deepEqual(JSON.parse(
+  (await request(`/api/collections/projects/records/${project.id}`, { token: superAuth.token })).column_roles_json
+), { 词条: 'headword', 莆田IPA: 'reading', 释义: 'meaning' },
+  '写入路由存的列名与读取侧 JSON 必须一字不差，stale 只是视图措辞')
+
 // proofreader 是指向 users 的 relation，塞 superuser id 会被外键校验拒绝。
 const volunteer = await request('/api/collections/users/records', {
   method: 'POST', token: superAuth.token,

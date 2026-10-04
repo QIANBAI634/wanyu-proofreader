@@ -26,6 +26,12 @@ node scripts/assist/score_rules.mjs --records backend/tests/fixtures/assist_trap
 全程只读；不需要服务器；不加 `--report` 时报告打到 stdout。
 `--keyboard` 可覆盖键盘口径（默认用仓库内的 `backend/keyboards/hinghwa-dialect.json`）。
 
+`--db` 会自己读 `projects.column_roles_json`，报告头因此必须说清列角色的来源
+（`--roles` / 库内 / 导出文件自带 / 没有 / 多项目不一致）。这件事值得写进文档是因为
+它曾经的失败模式是**静默少评一条规则**：R5（必填角色列为空）的判定作用域由列角色决定，
+读不到就整条不评，而旧报告只写一句「未提供」，读者会把它当成「这条规则精度为 0」。
+一张库里有多个项目且列角色不同时**不挑一个用**，直接降到不评并点名原因。
+
 ## 2. 脱敏（不可协商）
 
 默认输出**不含任何单元格正文**，只含 id、字段名、长度、码位集合与摘要。
@@ -52,7 +58,16 @@ R3 列级（`mixed_normalization_forms`）、R4（`punctuation_mix`）、R7 的�
 它们要看整列/全项目才成立，而弱标注的粒度是 `(提交, 字段)`。
 它们出现在报告里会被读成「精度 0」，所以打分器根本不列它们
 （`score_rules.mjs` 的 `defaultRuleSet` 上有注释说明）。
-要度量它们，需要先把标注粒度提到 `(提交, 列/页)`——那是 #185 一类的结构改动，不在本 spike 范围。
+跨行三类（`duplicate_identity` / `cross_source_conflict` / `merged_columns`）**同样不参与打分**，
+理由不同但后果一样：`ruleFlagsRow` 只能重跑 `runPageRules`，跨行判据要全量分组才成立，
+而 `defaultRuleSet` 没有列它们——`gate_changeset.mjs` 的 `NOT_SCOREABLE` 只点名了前四条，
+所以这四条会在变更集里以「不参与打分」出现，跨行三条则**连点名都没有**。
+要度量它们，需要先把标注粒度提到 `(提交, 列/页)` 或 `(提交, 分组)`——那是 #185 一类的结构改动，不在本 spike 范围。
+
+2026-10-02 起这份「未覆盖」清单不再手写：它与「跨行身份族」（`merged_columns` 两个 key、
+`duplicate_identity`、`cross_source_conflict`，#254 报的就是这一族以前两栏都不提）
+合并成一处定义 `backend/pb_hooks/lib/rule_coverage.js`，`gate_changeset.mjs` 报告的
+第三栏「无打分通道」与 `score_rules.mjs` 的 `defaultRuleSet` 都从它读，漏归类套件会红。
 
 ## 5. 「先定线」的时间戳证据
 

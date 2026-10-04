@@ -22,7 +22,9 @@
         class="pdf-canvas-stage"
         :style="{ width: `${canvasCssWidth}px`, height: `${canvasCssHeight}px` }"
       >
-        <canvas ref="canvasRef" class="pdf-canvas"></canvas>
+        <img v-if="pageImage" class="pdf-page-image" :src="src" :width="pageImage.width" :height="pageImage.height" :style="imageStyle" alt="原文页面" @error="emit('image-error')" />
+        <canvas v-else ref="canvasRef" class="pdf-canvas"></canvas>
+        <div v-if="pageImage" class="pdf-identity-watermark" aria-hidden="true">{{ identityStamp }}</div>
         <div v-if="loading || rendering" class="pdf-loading-mask">PDF 加载中...</div>
 
       </div>
@@ -32,9 +34,13 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import pb from '@/lib/pocketbase'
+
+const emit = defineEmits(['image-error'])
 
 const props = defineProps({
   src: { type: String, default: '' },
+  pageImage: { type: Object, default: null },
   pageNumber: { type: Number, default: 1 },
   sourcePageNumber: { type: Number, default: 0 },
   sourceTotalPages: { type: Number, default: 0 }
@@ -60,6 +66,14 @@ let resizeObserver = null
 let pdfjsLib = null
 let loadGeneration = 0
 let renderGeneration = 0
+const identityStamp = computed(() => `Wanyu | ${pb.authStore.record?.id || ''}`)
+const imageStyle = computed(() => {
+  if (!props.pageImage) return {}
+  const odd = rotation.value % 180 !== 0
+  const width = odd ? canvasCssHeight.value : canvasCssWidth.value
+  const height = odd ? canvasCssWidth.value : canvasCssHeight.value
+  return { width: `${width}px`, height: `${height}px`, position: 'absolute', left: '50%', top: '50%', transform: `translate(-50%, -50%) rotate(${rotation.value}deg)` }
+})
 
 const safePageLabel = computed(() => {
   const max = totalPages.value || 1
@@ -67,8 +81,8 @@ const safePageLabel = computed(() => {
 })
 
 watch(
-  () => props.src,
-  async (newSrc) => {
+  [() => props.src, () => props.pageImage],
+  async ([newSrc]) => {
     await loadPdf(newSrc)
   },
   { immediate: true }
@@ -94,6 +108,18 @@ async function loadPdf(src) {
   if (!src) {
     pdfDoc = null
     loading.value = false
+    return
+  }
+
+  if (props.pageImage) {
+    if (pdfDocTask) { try { await pdfDocTask.destroy() } catch { /* already gone */ } }
+    if (generation !== loadGeneration) return
+    pdfDocTask = null
+    pdfDoc = null
+    loading.value = false
+    await nextTick()
+    await renderCurrentPage()
+    attachResizeObserver()
     return
   }
 
@@ -151,6 +177,15 @@ function loadScript(src, type = 'text/javascript') {
 }
 
 async function renderCurrentPage() {
+  if (props.pageImage && wrapRef.value) {
+    const odd = rotation.value % 180 !== 0
+    const width = odd ? props.pageImage.height : props.pageImage.width
+    const height = odd ? props.pageImage.width : props.pageImage.height
+    const scale = Math.max(1, wrapRef.value.clientWidth - 16) / width * zoom.value
+    canvasCssWidth.value = width * scale
+    canvasCssHeight.value = height * scale
+    return
+  }
   if (!pdfDoc || !canvasRef.value || !wrapRef.value) return
   rendering.value = true
   const generation = ++renderGeneration
@@ -340,6 +375,20 @@ onBeforeUnmount(async () => {
 .pdf-canvas {
   display: block;
   background: #fff;
+}
+
+.pdf-page-image { display: block; }
+.pdf-identity-watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: rgba(80, 80, 80, .22);
+  transform: rotate(-25deg);
+  font-size: 16px;
+  overflow: hidden;
 }
 
 .pdf-loading-mask {

@@ -3,8 +3,8 @@ module fangji/backend
 go 1.27
 
 require (
-	github.com/labstack/echo/v5 v5.3.1
-	github.com/pdfcpu/pdfcpu v0.15.0
+	github.com/labstack/echo/v5 v5.4.0
+	github.com/pdfcpu/pdfcpu v0.16.0
 	github.com/pocketbase/dbx v1.12.0
 	github.com/pocketbase/pocketbase v0.40.4
 	golang.org/x/image v0.46.0
@@ -35,7 +35,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mattn/go-runewidth v0.0.27 // indirect
+	github.com/mattn/go-runewidth v0.0.30 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pocketbase/ozzo-validation/v4 v4.3.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

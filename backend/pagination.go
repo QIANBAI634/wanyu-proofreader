@@ -50,6 +50,19 @@ func (s *importService) projectPages(e *core.RequestEvent) error {
 			params["status"] = status
 		}
 	}
+	if state := strings.TrimSpace(query.Get("qualityState")); state != "" {
+		if !isValidQualityState(state) {
+			return apis.NewBadRequestError("质量状态只能是 candidate、validated 或 withheld", nil)
+		}
+		// 空值与 candidate 同义（v0 语义，见 quality_state.go 的 normalizeQualityState），
+		// 所以筛选 candidate 必须连带匹配没写过值的行，否则会漏掉迁移前建的记录。
+		if state == qualityStateCandidate {
+			filter += ` && (quality_state = {:qualityState} || quality_state = "")`
+		} else {
+			filter += " && quality_state = {:qualityState}"
+		}
+		params["qualityState"] = state
+	}
 	if text := strings.TrimSpace(query.Get("q")); text != "" {
 		filter += " && (page_number ~ {:q} || pdf_page ~ {:q} || ocr_text ~ {:q} || proofread_text ~ {:q} || proofreader.name ~ {:q} || proofreader.email ~ {:q})"
 		params["q"] = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text)

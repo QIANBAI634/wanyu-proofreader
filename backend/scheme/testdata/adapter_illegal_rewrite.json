@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "source_scheme_id": "synthetic-source",
+  "canonical_scheme_id": "synthetic-canonical",
+  "rule_version": "synthetic-illegal-rewrite-v1",
+  "annotation_system": "tone_value",
+  "comment": "故意写错的一条上下文规则：把韵母改写成目标方案清单里没有的 ɨ。它能在加载时通过校验（改写只在特定邻接下才触发，静态证明不了），所以必须被目标合法性检查挡下来。",
+  "source": {
+    "onsets": ["p"],
+    "rimes": ["a"],
+    "tone_values": ["533"]
+  },
+  "canonical": {
+    "onsets": ["b"],
+    "rimes": ["e"],
+    "tone_values": ["533"]
+  },
+  "segment_map": [
+    {"id": "O-p-b", "part": "onset", "from": "p", "to": "b", "basis": "synthetic"},
+    {"id": "R-a-e", "part": "rime", "from": "a", "to": "e", "basis": "synthetic"},
+    {"id": "T-533", "part": "tone", "from": "533", "to": "533", "basis": "synthetic"}
+  ],
+  "context_rules": [
+    {"id": "C-broken", "when_onset": "p", "when_rime": "a", "rewrite_rime": "ɨ",
+     "basis": "synthetic: 人为构造的非法改写"}
+  ],
+  "exceptions": []
+}

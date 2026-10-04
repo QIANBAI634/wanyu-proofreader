@@ -49,6 +49,8 @@
           v-if="pdfUrl"
           :style="{ visibility: loading || pdfLoading ? 'hidden' : 'visible' }"
           :src="pdfUrl"
+          :page-image="pageImage"
+          @image-error="fallbackToPdf"
           :page-number="localPdfPage"
           :source-page-number="currentPdfPage"
           :source-total-pages="totalPdfPages"
@@ -168,6 +170,8 @@ const {
   pdfPageWarning,
   allowedPdfPages,
   pdfUrl,
+  pageImage,
+  fallbackToPdf,
   localPdfPage,
   totalPdfPages,
   resetPdf,
