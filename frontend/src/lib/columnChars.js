@@ -91,16 +91,13 @@ export function charClass(text) {
 
   let han = 0
   let reading = 0
-  let other = 0
   for (const ch of Array.from(str)) {
     if (isMeaningSeparator(ch) || ch === ' ' || ch === '\t' || isCircledNumber(ch)) {
       // 分隔符/义项序号是「释义」的结构标记，不偏向读音。
-      other += 1
       continue
     }
     if (isHan(ch)) { han += 1; continue }
     if (isIpa(ch) || isLatin(ch) || isToneDigit(ch)) { reading += 1; continue }
-    other += 1
   }
 
   if (han > 0 && reading > 0) return 'mixed'
