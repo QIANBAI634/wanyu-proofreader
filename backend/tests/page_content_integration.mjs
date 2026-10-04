@@ -62,9 +62,8 @@ try {
   const url = `/api/fangji/projects/${project.id}/pages/${page.id}/content`
   const body = {
     rowJson: JSON.stringify({ 词头: pua, 释义: '站立' }),
-    text: `${pua} 站立`,
     headersJson: JSON.stringify(['词头', '释义']),
-    expectedUpdated: ''
+    expectedUpdated: page.updated
   }
   await fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }).then((r) => assert.equal(r.status, 401))
 

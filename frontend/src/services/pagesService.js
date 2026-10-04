@@ -111,10 +111,11 @@ export async function deletePendingPages(projectId, ids) {
 
 // #124：管理员修正「识别产出」（导入原文）内容。
 // expectedUpdated 用于乐观锁，服务端比对不符返回 409。
-export async function updatePageContent(projectId, pageId, { rowJson, text, headersJson, expectedUpdated }) {
+// ocr_text 由服务端按 rowJson + headersJson 生成，不接受调用方传入。
+export async function updatePageContent(projectId, pageId, { rowJson, headersJson, expectedUpdated }) {
   return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/pages/${encodeURIComponent(pageId)}/content`, {
     method: 'POST',
-    body: { rowJson, text, headersJson, expectedUpdated },
+    body: { rowJson, headersJson, expectedUpdated },
     requestKey: null
   })
 }

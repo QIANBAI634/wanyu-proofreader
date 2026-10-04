@@ -117,7 +117,8 @@ func TestSetPageContentAuthorization(t *testing.T) {
 		return w.Code
 	}
 
-	validBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","text":"徛 站立","headersJson":"[\"词头\",\"释义\"]","expectedUpdated":""}`
+	updated := page.GetString("updated")
+	validBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","headersJson":"[\"词头\",\"释义\"]","expectedUpdated":"` + updated + `"}`
 
 	// 无 token → 401
 	if code := post("", validBody); code != http.StatusUnauthorized {
@@ -132,10 +133,22 @@ func TestSetPageContentAuthorization(t *testing.T) {
 		t.Fatalf("成员但非管理员应 403，got %d", code)
 	}
 
+	// 乐观锁：expectedUpdated 为空 → 400
+	emptyLockBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","headersJson":"[\"词头\",\"释义\"]","expectedUpdated":""}`
+	if code := post(adminToken, emptyLockBody); code != http.StatusBadRequest {
+		t.Fatalf("乐观锁缺失应 400，got %d", code)
+	}
+
 	// 乐观锁：expectedUpdated 不匹配 → 409
-	conflictBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","text":"徛 站立","headersJson":"[\"词头\",\"释义\"]","expectedUpdated":"stale-value"}`
+	conflictBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","headersJson":"[\"词头\",\"释义\"]","expectedUpdated":"stale-value"}`
 	if code := post(adminToken, conflictBody); code != http.StatusConflict {
 		t.Fatalf("乐观锁不匹配应 409，got %d", code)
+	}
+
+	// 列序与字段不一致 → 400
+	badHeadersBody := `{"rowJson":"{\"词头\":\"徛\",\"释义\":\"站立\"}","headersJson":"[\"词头\"]","expectedUpdated":"` + updated + `"}`
+	if code := post(adminToken, badHeadersBody); code != http.StatusBadRequest {
+		t.Fatalf("列序与字段不一致应 400，got %d", code)
 	}
 
 	// 管理员正确请求 → 200

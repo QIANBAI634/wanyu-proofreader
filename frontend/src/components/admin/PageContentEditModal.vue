@@ -12,7 +12,9 @@
     <div v-if="marks.length" class="alert alert-warn">
       <div class="font-semibold mb-1">发现 {{ marks.length }} 处可疑格</div>
       <ul class="text-sm">
-        <li v-for="(m, i) in marks" :key="i">{{ markText(m) }}</li>
+        <li v-for="(m, i) in marks" :key="i">
+          <template v-if="m.field">列「{{ m.field }}」：</template>{{ renderFindingMessage(m.message) }}
+        </li>
       </ul>
     </div>
 
@@ -42,7 +44,8 @@
 import { computed, ref, watch } from 'vue'
 import AppModal from '@/components/AppModal.vue'
 import { useStructuredRow } from '@/composables/useStructuredRow'
-import { inspectPage } from '@/lib/rowInspection'
+import { inspectRow } from '@/lib/rowInspection'
+import { renderFindingMessage } from '@/lib/findingMessages'
 import { updatePageContent } from '@/services/pagesService'
 
 const props = defineProps({
@@ -65,23 +68,8 @@ watch(() => props.open, (isOpen) => {
   }
 })
 
-const marks = computed(() => (props.page ? inspectPage(props.page) : []))
-
-function markText(mark) {
-  const header = mark.header ? `列「${mark.header}」` : '整行'
-  switch (mark.signal) {
-    case 'width':
-      return `${header}：有效列 ${mark.count} 列，与表头 ${mark.expected} 列不符（疑似列合并）`
-    case 'long':
-      return `${header}：单元格过长（${mark.count} 码点）`
-    case 'rare':
-      return `${header}：含 ${mark.count} 个罕见字`
-    case 'ipa':
-      return `${header}：IPA 音标字符密集（${mark.count} 个）`
-    default:
-      return `${header}：疑似异常`
-  }
-}
+// 对当前编辑内容现算可疑格（而非读未修改的 props.page），编辑过程中实时更新。
+const marks = computed(() => inspectRow(rowHeaders.value, editedRow.value))
 
 async function save() {
   if (!props.page) return
@@ -89,12 +77,10 @@ async function save() {
   error.value = ''
   try {
     const rowJson = stringifyEditedRow()
-    const rowObj = JSON.parse(rowJson)
     const headersJson = JSON.stringify(rowHeaders.value)
-    const text = rowHeaders.value.map((h) => String(rowObj[h] ?? '').trim()).filter(Boolean).join(' ')
+    // 服务端按 rowJson + 表头序生成 ocr_text，不接受调用方传入。
     await updatePageContent(props.projectId, props.page.id, {
       rowJson,
-      text,
       headersJson,
       expectedUpdated: props.page.updated || ''
     })

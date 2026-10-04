@@ -67,6 +67,7 @@ const MESSAGES = {
     `出现 BMP 之外的汉字（${codepointList(params, 'codepoints') || '未列出'}），表示方式待 #123 决定`,
   row_width_differs: (params) =>
     `本行的单元格数与表头不符（${count(params?.cells)} 对 ${count(params?.headers)}），疑似列合并或错位`,
+  long_cell: (params) => `该格过长（${count(params?.codepoints)} 码点），疑似多列内容挤进一格`,
 
   // #177 规则引擎新增的措辞键。同样只出现码位与计数，不出现字形。
   confusable_ascii_in_reading: (params) => {
