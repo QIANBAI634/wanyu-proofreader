@@ -67,13 +67,8 @@ export function isCircledNumber(ch) {
   return CIRCLED.has(ch)
 }
 
-// 集外字占位符 @hex（如 @20000），与 detectors.PLACEHOLDER 对齐。
-export function isPlaceholder(ch) {
-  return ch === '@'
-}
-
 // 释义分隔符（：‖ 等），与 detectors.MEANING_SEPARATOR 对齐。
-const MEANING_SEPARATORS = new Set('：∶‖')
+const MEANING_SEPARATORS = new Set('：‖')
 
 export function isMeaningSeparator(ch) {
   return MEANING_SEPARATORS.has(ch)
@@ -94,6 +89,15 @@ export function isPlaceholderChar(ch) {
   return inRanges(cp, PLACEHOLDER_RANGES)
 }
 
+// @hex 占位符：@ + 3~6 位十六进制（与 detectors.PLACEHOLDER = @[\da-fA-F]{3,6} 对齐）。
+const HEX_PLACEHOLDER_RE = /@[\da-fA-F]{3,6}/
+
+// 折叠 @hex 占位符为一个 PUA 占位字符：这样「打不出的字」整体归入内容字符（han），
+// 而不是把 @ 和 hex 位拆开、让 hex 位被误判成声调数字。
+function collapseHexPlaceholders(text) {
+  return String(text ?? '').replace(/@[\da-fA-F]{3,6}/g, '')
+}
+
 // ---- 主导类别 ----
 // 对一个单元格文本，统计其码点类别，返回主导类别：
 //   'han'      —— 主要是汉字（词头 / 释义的正文）
@@ -101,7 +105,8 @@ export function isPlaceholderChar(ch) {
 //   'mixed'    —— 同时含「汉字」与「读音类」两派，疑似列合并
 //   'empty'    —— 空串
 export function charClass(text) {
-  const str = String(text ?? '').trim()
+  // 先折叠 @hex 占位符，避免 hex 位被当声调数字（阻断项修复）。
+  const str = collapseHexPlaceholders(text).trim()
   if (!str) return 'empty'
 
   let han = 0
@@ -111,9 +116,11 @@ export function charClass(text) {
       // 分隔符/义项序号是「释义」的结构标记，不偏向读音。
       continue
     }
-    // 集外字占位符（PUA/IDS）是打不出的「内容字符」，归入词头/释义类，避免错位。
+    // 集外字占位符（PUA/IDS，含折叠进来的 @hex）是「内容字符」，归入词头/释义类。
     if (isHan(ch) || isPlaceholderChar(ch)) { han += 1; continue }
-    if (isIpa(ch) || isLatin(ch) || isToneDigit(ch)) { reading += 1; continue }
+    if (isIpa(ch) || isLatin(ch)) { reading += 1; continue }
+    // 声调数字：只有前面已有读音字符时才算（如 kiā533），孤立数字/年份（1978）不算。
+    if (isToneDigit(ch) && reading > 0) { reading += 1; continue }
   }
 
   if (han > 0 && reading > 0) return 'mixed'

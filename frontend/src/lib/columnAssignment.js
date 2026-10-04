@@ -91,8 +91,12 @@ const REGION_LABEL = /〔(?:莆田|仙游|[莆仙])〕/
 function isMergedCell(cell, cls) {
   if (!cell) return false
   if (cls === 'mixed') return true
-  // 地区标签（〔莆田〕）或成对括号不平衡 → 列合并信号（detectors.detect_column_collapse）
-  if (REGION_LABEL.test(cell)) return true
+  // 地区标签（〔莆田〕）出现在「读音/释义格」才是合并信号；单独一个地区标注格
+  // 是合法的。这里拿不到列角色，退化为：地区标签之外还有别的内容时才算可疑。
+  if (REGION_LABEL.test(cell)) {
+    const rest = cell.replace(REGION_LABEL, '').trim()
+    if (rest !== '') return true
+  }
   const fullWidthOpen = (cell.match(/［/g) || []).length
   const fullWidthClose = (cell.match(/］/g) || []).length
   if (fullWidthOpen !== fullWidthClose) return true

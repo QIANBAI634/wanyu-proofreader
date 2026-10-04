@@ -94,6 +94,21 @@ test('placeholder (PUA/IDS) headword is assigned to headword column', () => {
   assert.equal(row2.词头, ids)
 })
 
+test('@hex placeholder headword is assigned to headword column (blocking regression)', () => {
+  const row = assignRow(['词头', '读音', '释义'], ['@20000', 'ka', '①东西'])
+  assert.equal(row.词头, '@20000')
+  assert.equal(row.读音, 'ka')
+  assert.equal(row.释义, '①东西')
+})
+
+test('isolated region label is not flagged as merged', () => {
+  // 单独一个地区标注格（如地区列）是合法的，只有地区标签外还有内容才算可疑。
+  const headers = ['词头', '地区', '释义']
+  const cells = ['徛', '〔莆田〕', '站']
+  const result = assignColumns(headers, cells)
+  assert.equal(result[1].merged, false)
+})
+
 test('rare CJK extension headword is preserved unchanged', () => {
   // 静默替换率 = 0：分列不改字，生僻字原样保留
   const row = assignRow(['词头', '释义'], ['𢶀', '生僻字释义'])

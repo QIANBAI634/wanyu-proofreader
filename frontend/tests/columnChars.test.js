@@ -79,3 +79,17 @@ test('charClass treats placeholder as content (han)', () => {
   assert.equal(charClass(ids), 'han')
   assert.equal(charClass(pua + ' kiā'), 'mixed') // 集外字词头 + 音读合并
 })
+
+test('charClass strips @hex placeholder (blocking regression)', () => {
+  // @20000 是「打不出的字」占位，不是声调数字——五个 hex 位不能被当读音类。
+  assert.equal(charClass('@20000'), 'han')
+  assert.equal(charClass('甲@20000'), 'han')
+  assert.equal(charClass('@20000 kiā'), 'mixed') // @hex 词头 + 音读
+})
+
+test('charClass does not treat isolated digits as reading', () => {
+  // 孤立数字/年份不是读音，只有跟在读音字符后的才是声调。
+  assert.equal(charClass('1978'), 'other')
+  assert.equal(charClass('①1978年成立'), 'han')
+  assert.equal(charClass('kiā533'), 'reading') // 读音后的声调数字仍是 reading
+})
