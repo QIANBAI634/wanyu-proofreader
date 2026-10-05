@@ -146,7 +146,7 @@ func (s *importService) setPageContent(c *core.RequestEvent) error {
 	}
 
 	// ocr_text 在服务端按 rowJson + 表头序生成，不接受调用方传入（保证与
-	// import_service.go 的 composeRowText / structuredRow.composeRowText 同口径）。
+	// import_service.go 的 entryText 拼接 / frontend useStructuredRow.js 的 composeRowText 同口径）。
 	rowObj, _ := parseRowObject(payload.RowJSON)
 	text := composeRowText(headers, rowObj)
 
@@ -198,7 +198,7 @@ func sameKeySet(a, b []string) bool {
 	return true
 }
 
-// composeRowText 按列序拼接非空值，对齐 structuredRow.composeRowText。
+// composeRowText 按列序拼接非空值，对齐 frontend/src/composables/useStructuredRow.js 的 composeRowText。
 func composeRowText(headers []string, rowObj map[string]any) string {
 	parts := make([]string, 0, len(headers))
 	for _, h := range headers {

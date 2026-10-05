@@ -96,18 +96,3 @@ export function inspectRow(headers, rowObj) {
 
   return marks
 }
-
-// 便捷：给一个 page 记录，从 ocr_row_json / row_headers_json 直接算可疑格。
-export function inspectPage(page) {
-  if (!page || typeof page !== 'object') return []
-  let headers = []
-  let rowObj = {}
-  try {
-    headers = JSON.parse(page.row_headers_json || '[]')
-  } catch { /* corrupt headers degrade to empty */ }
-  try {
-    const parsed = JSON.parse(page.ocr_row_json || '{}')
-    if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') rowObj = parsed
-  } catch { /* corrupt row degrades to empty */ }
-  return inspectRow(headers, rowObj)
-}

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { inspectRow, inspectPage, LONG_CELL_CODEPOINTS } from '../src/lib/rowInspection.js'
+import { inspectRow, LONG_CELL_CODEPOINTS } from '../src/lib/rowInspection.js'
 
 test('no marks for a clean row', () => {
   const headers = ['词头', '音读', '释义']
@@ -48,22 +48,6 @@ test('ipa signal when a cell is dense with IPA', () => {
   const ipa = marks.find((m) => m.message.key === 'non_ipa_range_codepoints')
   assert.ok(ipa, 'should flag IPA dense')
   assert.equal(ipa.field, '音读')
-})
-
-test('inspectPage parses page record', () => {
-  const page = {
-    ocr_row_json: JSON.stringify({ 词头: '𢶀', 音读: 'kiā' }),
-    row_headers_json: JSON.stringify(['词头', '音读'])
-  }
-  const marks = inspectPage(page)
-  // 词头有罕见字
-  assert.ok(marks.some((m) => m.message.key === 'cjk_extension_present'))
-})
-
-test('inspectPage degrades on corrupt input', () => {
-  assert.deepEqual(inspectPage(null), [])
-  assert.deepEqual(inspectPage({}), [])
-  assert.deepEqual(inspectPage({ ocr_row_json: 'not json', row_headers_json: 'not json' }), [])
 })
 
 test('inspectRow does not leak cell content in marks', () => {
