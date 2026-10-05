@@ -156,6 +156,29 @@ SPECS = {
             'quality_state_basis': {'required': False},
         }),
     },
+    # #183 的两把键：条目级自然键（部分唯一索引，空键的存量行不受约束）与
+    # 作业级的 bundle 身份。查询计划断言用的就是导入路径真实发出的两个谓词。
+    '1789200500_bundle_entry_keys.js': {
+        'indexes': ['idx_pages_source_entry', 'idx_import_jobs_bundle'],
+        'plans': [
+            # 查询里必须**显式**写出 source_entry_id != ''，SQLite 才会考虑这个部分索引；
+            # 不写就退化成按 project 扫，而 scan 依然"正确"，只是这条断言会先失败。
+            ('pages',
+             "SELECT id FROM pages WHERE project=? AND source_entry_id != '' AND source_system=? AND source_id=? AND source_version=? AND source_entry_id='e'",
+             ('p', 's', 'a', 'v'), 'idx_pages_source_entry'),
+            # 与 findJobByBundle 的谓词逐字一致（含 status != 'failed'）：部分索引只有
+            # 在查询里写出这个谓词时才会被选中。
+            ('import_jobs',
+             "SELECT id FROM import_jobs WHERE project=? AND bundle_id != '' AND bundle_id=? AND status != 'failed'",
+             ('p', 'b'), 'idx_import_jobs_bundle'),
+        ],
+        'collection_indexes': ('pages', 'idx_pages_source_entry'),
+        'fields': ('import_jobs', {
+            'bundle_id': {'required': False},
+            'bundle_schema_version': {'required': False},
+            'mode': {'values_contains': 'bundle'},
+        }),
+    },
 }
 FIRST = '1788940000_initial_schema.js'
 

@@ -457,6 +457,8 @@ jobs:
         run: python3 -m unittest discover -s backend/tests -p 'test_*.py'
       - name: Verify Unicode import, proofreading, arbitration and restart persistence
         run: python3 backend/tests/run_rare_characters_integration.py
+      - name: Verify Review Bundle import idempotency and restart recovery
+        run: python3 backend/tests/run_bundle_import_integration.py
       - name: Publish Go coverage summary
         working-directory: backend
         run: |
