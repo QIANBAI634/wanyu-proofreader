@@ -86,7 +86,7 @@ export function assignColumns(headers, cells) {
 //   1. charClass 为 'mixed'（同格同时含汉字与读音类）
 //   2. 含义项序号后紧跟读音类（如「①啊 ②啊」里夹了音标段）——用 readingSpans 落在释义格判定
 // 第 2 条较难可靠判定，首版只用 mixed + 不平衡括号 + 地区标签。
-const REGION_LABEL = /〔(?:莆田|仙游|[莆仙])〕/
+const REGION_LABEL = /〔(?:莆田|仙游|[莆仙])〕/g
 
 function isMergedCell(cell, cls) {
   if (!cell) return false
@@ -94,6 +94,7 @@ function isMergedCell(cell, cls) {
   // 地区标签（〔莆田〕）出现在「读音/释义格」才是合并信号；单独一个地区标注格
   // 是合法的。这里拿不到列角色，退化为：地区标签之外还有别的内容时才算可疑。
   if (REGION_LABEL.test(cell)) {
+    REGION_LABEL.lastIndex = 0 // 全局正则 test 会记住位置，重置避免影响后续 replace
     const rest = cell.replace(REGION_LABEL, '').trim()
     if (rest !== '') return true
   }

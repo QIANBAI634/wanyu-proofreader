@@ -90,12 +90,13 @@ export function isPlaceholderChar(ch) {
 }
 
 // @hex 占位符：@ + 3~6 位十六进制（与 detectors.PLACEHOLDER = @[\da-fA-F]{3,6} 对齐）。
-const HEX_PLACEHOLDER_RE = /@[\da-fA-F]{3,6}/
+// 全局替换用，是 collapseHexPlaceholders 的唯一来源（不另写一份内联正则）。
+const HEX_PLACEHOLDER_RE = /@[\da-fA-F]{3,6}/g
 
 // 折叠 @hex 占位符为一个 PUA 占位字符：这样「打不出的字」整体归入内容字符（han），
 // 而不是把 @ 和 hex 位拆开、让 hex 位被误判成声调数字。
 function collapseHexPlaceholders(text) {
-  return String(text ?? '').replace(/@[\da-fA-F]{3,6}/g, '')
+  return String(text ?? '').replace(HEX_PLACEHOLDER_RE, '')
 }
 
 // ---- 主导类别 ----
@@ -120,6 +121,9 @@ export function charClass(text) {
     if (isHan(ch) || isPlaceholderChar(ch)) { han += 1; continue }
     if (isIpa(ch) || isLatin(ch)) { reading += 1; continue }
     // 声调数字：只有前面已有读音字符时才算（如 kiā533），孤立数字/年份（1978）不算。
+    // 已知局限：整格只有调值数字（如孤立「533」这种 legal long tone）会退化成 other，
+    // 与 detectors 的 LEGAL_LONG_TONES 位置无关判据不同。本仓语料未见孤立调值格，
+    // 故暂用位置依赖的保守判据，避免把年份误判成读音。
     if (isToneDigit(ch) && reading > 0) { reading += 1; continue }
   }
 
