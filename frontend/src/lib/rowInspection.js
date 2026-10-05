@@ -13,8 +13,11 @@ export const LONG_CELL_CODEPOINTS = 200
 // 单个单元格内 IPA 字符数量的告警阈值。
 export const IPA_DENSE_THRESHOLD = 5
 
-function codepointCount(text) {
-  return Array.from(String(text ?? '')).length
+// isHanChar：CJK 统一表意文字主区（常用字）。
+function isHanChar(ch) {
+  if (!ch) return false
+  const cp = ch.codePointAt(0)
+  return cp >= 0x4e00 && cp <= 0x9fff
 }
 
 // isIpaChar：本地最小 IPA 判定（IPA 块 U+0250–U+02AF、修饰字母 U+02B0–U+02FF、
@@ -27,36 +30,49 @@ function isIpaChar(ch) {
     || (cp >= 0x0300 && cp <= 0x036f)
 }
 
+// isLatinChar：ASCII 拉丁字母 + Latin-1/Latin Extended-A 变音字母（如 ā）。
+function isLatinChar(ch) {
+  if (!ch) return false
+  const cp = ch.codePointAt(0)
+  return (cp >= 0x0041 && cp <= 0x005a) || (cp >= 0x0061 && cp <= 0x007a)
+    || (cp >= 0x00c0 && cp <= 0x00ff) || (cp >= 0x0100 && cp <= 0x017f)
+}
+
 // inspectRow(headers, rowObj) → [{ field, message: {key, params} }]
 //   headers —— 目标列名数组
 //   rowObj   —— header → value 的结构化行对象
+//
+// 信号：
+//   - column_collapse：一格同时含「汉字」与「读音类（音标/拉丁）」，疑似列合并
+//     （这是 hydrate 后仍能触发的真实信号；"缺失键"在 hydrate 后恒不发生，
+//     见 #124 复审：hydrate 会遍历 headers 逐个建键）
+//   - long_cell：单元格超长
+//   - cjk_extension_present：含罕见字
+//   - non_ipa_range_codepoints：IPA 字符密集
 export function inspectRow(headers, rowObj) {
   const hs = (headers || []).map(String)
   const row = rowObj && typeof rowObj === 'object' && !Array.isArray(rowObj) ? rowObj : {}
   const marks = []
 
-  // 1. 结构性列缺失：表头里有某列，但 rowObj 里根本没有这个键。
-  //    「值空」是另一条信号（required_role_field_empty），不能并进这里——
-  //    否则合法留空的行会被误报成列合并（#124 S2）。
-  const missingKeys = hs.filter((h) => !Object.prototype.hasOwnProperty.call(row, h))
-  if (missingKeys.length) {
-    marks.push({
-      field: '',
-      message: {
-        key: 'row_width_differs',
-        params: { cells: hs.length - missingKeys.length, headers: hs.length }
-      }
-    })
-  }
-
-  // 2. 逐格检查：超长 / 罕见字 / IPA 密集。
   for (const h of hs) {
     const value = String(row[h] ?? '')
     if (value === '') continue
-    const n = codepointCount(value)
+    const chars = Array.from(value)
+
+    // 1. 列合并：一格同时含汉字 + 读音类（音标/拉丁）。这是「多列挤进一格」的可观测形状。
+    const hasHan = chars.some(isHanChar)
+    const hasReading = chars.some((ch) => isIpaChar(ch) || isLatinChar(ch))
+    if (hasHan && hasReading) {
+      marks.push({ field: h, message: { key: 'column_collapse', params: {} } })
+    }
+
+    // 2. 超长。
+    const n = chars.length
     if (n > LONG_CELL_CODEPOINTS) {
       marks.push({ field: h, message: { key: 'long_cell', params: { codepoints: n } } })
     }
+
+    // 3. 罕见字。
     const rare = rareCharacters([value])
     if (rare.length) {
       marks.push({
@@ -67,7 +83,9 @@ export function inspectRow(headers, rowObj) {
         }
       })
     }
-    const ipaCodepoints = Array.from(value).filter((ch) => isIpaChar(ch)).map((ch) => ch.codePointAt(0))
+
+    // 4. IPA 密集。
+    const ipaCodepoints = chars.filter(isIpaChar).map((ch) => ch.codePointAt(0))
     if (ipaCodepoints.length >= IPA_DENSE_THRESHOLD) {
       marks.push({
         field: h,

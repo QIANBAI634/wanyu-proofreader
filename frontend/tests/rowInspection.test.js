@@ -8,18 +8,20 @@ test('no marks for a clean row', () => {
   assert.deepEqual(inspectRow(headers, row), [])
 })
 
-test('width signal when a header key is missing (not when value empty)', () => {
+test('column_collapse when a cell mixes han and reading', () => {
   const headers = ['词头', '音读', '释义']
-  // 释义键缺失 → width
-  const marks = inspectRow(headers, { 词头: '徛', 音读: 'kiā' })
-  const width = marks.find((m) => m.message.key === 'row_width_differs')
-  assert.ok(width, 'missing key should flag width')
-  assert.equal(width.message.params.cells, 2)
-  assert.equal(width.message.params.headers, 3)
+  // 一格挤了「徛」（汉字）+「kiā」（拉丁）→ 列合并
+  const marks = inspectRow(headers, { 词头: '徛 kiā', 音读: '', 释义: '站' })
+  const collapse = marks.find((m) => m.message.key === 'column_collapse')
+  assert.ok(collapse, 'mixed cell should flag column collapse')
+  assert.equal(collapse.field, '词头')
+})
 
-  // 值空但键存在 → 不报 width（合法留空）
-  const noWidth = inspectRow(headers, { 词头: '徛', 音读: 'kiā', 释义: '' })
-  assert.equal(noWidth.some((m) => m.message.key === 'row_width_differs'), false)
+test('no column_collapse when cell is pure han or pure reading', () => {
+  const headers = ['词头', '音读', '释义']
+  // 纯汉字释义格、纯拉丁音读格都不该报列合并
+  const marks = inspectRow(headers, { 词头: '徛', 音读: 'kiā', 释义: '站、立' })
+  assert.equal(marks.some((m) => m.message.key === 'column_collapse'), false)
 })
 
 test('long signal when a cell exceeds threshold', () => {
@@ -50,13 +52,12 @@ test('ipa signal when a cell is dense with IPA', () => {
 
 test('inspectPage parses page record', () => {
   const page = {
-    ocr_row_json: JSON.stringify({ 词头: '𢶀' }),
-    row_headers_json: JSON.stringify(['词头', '释义'])
+    ocr_row_json: JSON.stringify({ 词头: '𢶀', 音读: 'kiā' }),
+    row_headers_json: JSON.stringify(['词头', '音读'])
   }
   const marks = inspectPage(page)
-  // 词头有罕见字 + 释义键缺失 → rare + width
+  // 词头有罕见字
   assert.ok(marks.some((m) => m.message.key === 'cjk_extension_present'))
-  assert.ok(marks.some((m) => m.message.key === 'row_width_differs'))
 })
 
 test('inspectPage degrades on corrupt input', () => {
