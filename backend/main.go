@@ -64,6 +64,7 @@ func main() {
 	importer.registerPagination()
 	importer.registerArtifacts()
 	importer.registerQualityState()
+	importer.registerBundleImports()
 	importer.registerPageContent()
 
 	identityProviders := make([]externalIdentityProvider, 0, 1)

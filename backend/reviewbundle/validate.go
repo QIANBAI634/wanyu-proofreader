@@ -141,9 +141,24 @@ func ValidateDir(dir string) (Report, error) {
 // ValidateZip checks a zip whose manifest.json is at the archive root,
 // or under a single top-level directory.
 func ValidateZip(data []byte) (Report, error) {
+	files, refusal, err := loadZipFiles(data)
+	if err != nil {
+		return Report{}, err
+	}
+	if refusal != nil {
+		return *refusal, nil
+	}
+	return validateLoaded(normalizeRoot(files)), nil
+}
+
+// loadZipFiles 是唯一的解包入口：ValidateZip 与 Load 共用它，所以「通过校验」与
+// 「能被解析」不可能各自漂移——不共用的话，导入侧会在校验已经拒绝的包上继续读，
+// 而读出来的东西正是校验说不能用的。
+// refusal 非空表示整包被拒（此时 files 为 nil），err 只用于「压根不是 zip」。
+func loadZipFiles(data []byte) (map[string][]byte, *Report, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return Report{}, ErrNotZip
+		return nil, nil, ErrNotZip
 	}
 	files := map[string][]byte{}
 	var total int
@@ -153,33 +168,178 @@ func ValidateZip(data []byte) (Report, error) {
 		}
 		name, ok := cleanRel(file.Name)
 		if !ok {
-			return refused("path_unsafe", fmt.Sprintf("压缩包内路径「%s」不安全。", file.Name)), nil
+			report := refused("path_unsafe", fmt.Sprintf("压缩包内路径「%s」不安全。", file.Name))
+			return nil, &report, nil
 		}
 		if file.UncompressedSize64 > maxFileBytes {
-			return refused("bundle_too_large", fmt.Sprintf("文件 %s 超过大小限制。", name)), nil
+			report := refused("bundle_too_large", fmt.Sprintf("文件 %s 超过大小限制。", name))
+			return nil, &report, nil
 		}
 		rc, err := file.Open()
 		if err != nil {
-			return Report{}, ErrNotZip
+			return nil, nil, ErrNotZip
 		}
 		payload, err := io.ReadAll(io.LimitReader(rc, maxFileBytes+1))
 		rc.Close()
 		if err != nil {
-			return Report{}, err
+			return nil, nil, err
 		}
 		if len(payload) > maxFileBytes {
-			return refused("bundle_too_large", fmt.Sprintf("文件 %s 超过大小限制。", name)), nil
+			report := refused("bundle_too_large", fmt.Sprintf("文件 %s 超过大小限制。", name))
+			return nil, &report, nil
 		}
 		total += len(payload)
 		if total > maxTotalBytes || len(files) >= maxZipFiles {
-			return refused("bundle_too_large", "包超过大小或文件数限制。"), nil
+			report := refused("bundle_too_large", "包超过大小或文件数限制。")
+			return nil, &report, nil
 		}
 		if _, exists := files[name]; exists {
-			return refused("path_unsafe", fmt.Sprintf("压缩包内路径「%s」重复。", name)), nil
+			report := refused("path_unsafe", fmt.Sprintf("压缩包内路径「%s」重复。", name))
+			return nil, &report, nil
 		}
 		files[name] = payload
 	}
-	return validateLoaded(normalizeRoot(files)), nil
+	return files, nil, nil
+}
+
+// Field 是 payload 里一个字段：名字 + 原样的 JSON 值。
+// Value 不预先规整成 string——契约允许字段值不是字符串，校验器因此不替调用方
+// 决定该拒绝什么。导入侧只接受文本列，非文本值逐条报出来（见 backend/bundle_import.go
+// 的 FIELD_VALUE_NOT_TEXT），页码列例外：它本来就落到整数列。
+type Field struct {
+	Name  string
+	Value any
+}
+
+// Entry 是一个待导入条目。Fields 保留 JSONL 里的书写顺序，仅此而已——
+// 落库的表头顺序由 bundle.RequestedFields 决定，见 backend/bundle_import.go。
+type Entry struct {
+	File    string
+	Line    int
+	EntryID string
+	Fields  []Field
+}
+
+// Bundle 是通过校验的进入包内容。
+type Bundle struct {
+	BundleID        string
+	SchemaVersion   string
+	SourceSystem    string
+	SourceID        string
+	SourceVersion   string
+	RequestedFields []string
+	// RightsRef 是来源登记里的 logical_id。校验器只查它的格式（协议 §4），
+	// 存在性由导入侧负责——所以它必须被带出来，否则那条契约分工在导入侧就是断的。
+	RightsRef string
+	Operator  string
+	Entries   []Entry
+}
+
+// Load 重新读一遍已通过校验的 zip 并返回内容。校验不通过时返回 (Bundle{}, report, nil)，
+// 调用方必须先看 report.OK——这一点与 ValidateZip 是同一个判据，不是第二个。
+//
+// 只接受进入包（ReviewBundle/v0）：结果包（ReviewResultBundle/v0）是 W 自己产出的形状，
+// 把它导回 W 需要先定「回流结果如何变成条目」的规则，那是 #96 的语义，不在 #183 里猜。
+func Load(data []byte) (Bundle, Report, error) {
+	files, refusal, err := loadZipFiles(data)
+	if err != nil {
+		return Bundle{}, Report{}, err
+	}
+	if refusal != nil {
+		return Bundle{}, *refusal, nil
+	}
+	files = normalizeRoot(files)
+	report := validateLoaded(files)
+	if !report.OK {
+		return Bundle{}, report, nil
+	}
+	if report.SchemaVersion != SchemaInbound {
+		report.OK = false
+		report.Errors = []Diagnostic{{
+			Code:    "schema_version_unsupported",
+			Message: refusedText("只有进入包（ReviewBundle/v0）可以导入。"),
+		}}
+		return Bundle{}, report, nil
+	}
+
+	var doc manifest
+	if err := json.Unmarshal(files["manifest.json"], &doc); err != nil {
+		return Bundle{}, refused("manifest_invalid", "manifest.json 无法解析。"), nil
+	}
+	bundle := Bundle{
+		BundleID:        doc.Bundle.BundleID,
+		SchemaVersion:   doc.Bundle.SchemaVersion,
+		SourceSystem:    doc.SourceSystem,
+		SourceID:        doc.SourceID,
+		SourceVersion:   doc.SourceVersion,
+		RequestedFields: doc.RequestedFields,
+		RightsRef:       doc.RightsRef,
+		Operator:        doc.Operator,
+	}
+	for _, file := range doc.Files {
+		name, ok := cleanRel(file.Path)
+		if !ok {
+			continue // 校验已经拒绝过这种路径，这里只是不让它继续往下走
+		}
+		for index, row := range splitLines(files[name]) {
+			if len(bytes.TrimSpace(row)) == 0 {
+				continue
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(row, &obj); err != nil || obj == nil {
+				continue
+			}
+			id, _ := stringField(obj, "entry_id")
+			fields, ok := orderedFields(obj["fields"])
+			if !ok {
+				continue
+			}
+			bundle.Entries = append(bundle.Entries, Entry{
+				File:    name,
+				Line:    index + 1,
+				EntryID: id,
+				Fields:  fields,
+			})
+		}
+	}
+	return bundle, report, nil
+}
+
+// orderedFields 按 JSON 里的书写顺序读出对象字段。
+//
+// 它只保证「不要退回 Go map 的字母序」，**不**保证列顺序等于 requested_fields：
+// 条目里的键顺序是上游自己写的，导入侧要按 requested_fields 投影（见
+// backend/bundle_import.go 的 buildBundlePage）。契约只要求 fields **包含**
+// requested_fields（下界），所以条目可以多给键——那些键不进 W 的列清单。
+func orderedFields(raw json.RawMessage) ([]Field, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, false
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil, false
+	}
+	fields := []Field{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := keyTok.(string)
+		if !ok {
+			return nil, false
+		}
+		var value any
+		if err := dec.Decode(&value); err != nil {
+			return nil, false
+		}
+		fields = append(fields, Field{Name: name, Value: value})
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, false
+	}
+	return fields, true
 }
 
 func validateLoaded(files map[string][]byte) Report {

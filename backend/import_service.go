@@ -592,6 +592,8 @@ func (s *importService) runWorker() {
 				s.processPDF(work)
 			case "ocr":
 				s.processOCR(work)
+			case "bundle":
+				s.processBundle(work)
 			}
 		}()
 	}
@@ -618,6 +620,11 @@ func (s *importService) recoverPendingWork() {
 			}
 			if job.GetString("mode") == "ocr" {
 				kind = "ocr"
+			}
+			// 恢复扫描只看 status，默认把作业当成 CSV；bundle 作业的 source_file 是 zip，
+			// 落到 processCSV 会直接判成编码错误，所以模式必须在这里分流。
+			if job.GetString("mode") == "bundle" {
+				kind = "bundle"
 			}
 			s.enqueue(importWork{kind: kind, id: job.Id, requestID: "recovery-" + job.Id})
 		}
