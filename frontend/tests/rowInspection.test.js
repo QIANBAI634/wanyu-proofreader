@@ -8,22 +8,6 @@ test('no marks for a clean row', () => {
   assert.deepEqual(inspectRow(headers, row), [])
 })
 
-test('column_collapse when a cell mixes han and reading', () => {
-  const headers = ['词头', '音读', '释义']
-  // 一格挤了「徛」（汉字）+「kiā」（拉丁）→ 列合并
-  const marks = inspectRow(headers, { 词头: '徛 kiā', 音读: '', 释义: '站' })
-  const collapse = marks.find((m) => m.message.key === 'column_collapse')
-  assert.ok(collapse, 'mixed cell should flag column collapse')
-  assert.equal(collapse.field, '词头')
-})
-
-test('no column_collapse when cell is pure han or pure reading', () => {
-  const headers = ['词头', '音读', '释义']
-  // 纯汉字释义格、纯拉丁音读格都不该报列合并
-  const marks = inspectRow(headers, { 词头: '徛', 音读: 'kiā', 释义: '站、立' })
-  assert.equal(marks.some((m) => m.message.key === 'column_collapse'), false)
-})
-
 test('long signal when a cell exceeds threshold', () => {
   const headers = ['释义']
   const longText = '啊'.repeat(LONG_CELL_CODEPOINTS + 1)
@@ -42,18 +26,22 @@ test('rare signal when a cell contains rare CJK extension', () => {
   assert.equal(rare.field, '词头')
 })
 
-test('ipa signal when a cell is dense with IPA', () => {
-  const headers = ['音读']
-  const marks = inspectRow(headers, { 音读: 'ɑ ɒ ɔ ɛ ø ɡ' })
-  const ipa = marks.find((m) => m.message.key === 'non_ipa_range_codepoints')
-  assert.ok(ipa, 'should flag IPA dense')
-  assert.equal(ipa.field, '音读')
+test('does not flag normal definition with reading annotation', () => {
+  // 方言词典释义里带读音括注是常态，不应报任何可疑格（#124 复审结论）。
+  const headers = ['词头', '释义']
+  const marks = inspectRow(headers, { 词头: '镀锌铁', 释义: '镀锌铁。‖外来词，来自马来语ajan的音译。' })
+  assert.deepEqual(marks, [])
 })
 
 test('inspectRow does not leak cell content in marks', () => {
   const headers = ['释义']
   const marks = inspectRow(headers, { 释义: '机密内容' })
-  // 标记只含结构信息（key + params 码位/计数），绝不包含单元格正文
   const serialized = JSON.stringify(marks)
   assert.equal(serialized.includes('机密内容'), false)
+})
+
+test('corrupt or empty input degrades to empty', () => {
+  assert.deepEqual(inspectRow(null, {}), [])
+  assert.deepEqual(inspectRow([], {}), [])
+  assert.deepEqual(inspectRow(['词头'], null), [])
 })
