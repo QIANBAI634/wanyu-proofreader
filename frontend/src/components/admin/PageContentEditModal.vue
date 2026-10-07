@@ -9,7 +9,7 @@
       第 {{ page?.page_number }} 条 · 修正「导入原文」内容，不涉及校对结果
     </p>
 
-    <div v-if="marks.length" class="alert alert-warn">
+    <div v-if="marks.length" class="alert alert-warning" role="status">
       <div class="font-semibold mb-1">发现 {{ marks.length }} 处可疑格</div>
       <ul class="text-sm">
         <li v-for="(m, i) in marks" :key="i">
