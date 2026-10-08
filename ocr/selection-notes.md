@@ -16,9 +16,9 @@
 ### 方案 1：数字原生 PDF 分流（pdftotext / pdfjs getTextContent）
 - 方言生僻字表现：极好（直接取 Unicode）
 - 列还原表现：好（坐标聚类）
-- 部署契合度：极高（后端已 vendored pdfjs，零新依赖）
+- 部署契合度：极高（前端已随仓分发 PDF.js，后台运行镜像已包含 Poppler；在开发机或独立运行脚本时需另行安装，见 [外部依赖](README.md#外部依赖)）
 - 成本/耗时：最低
-- 许可：无新增
+- 许可：PDF.js 沿用现有登记；Poppler 的登记取决于是否随仓库或发布物分发，见下方「许可边界」
 - 置信度/坐标：坐标有、置信度无（但本就是真值）
 - 建议：**首选第一步，必做**
 
@@ -121,5 +121,5 @@
 ## 许可边界
 
 - Tesseract（Apache-2.0）、PaddleOCR（Apache-2.0）、ppstructure（Apache-2.0）等开源方案许可友好，可 AGPL 兼容使用。
-- VLM 自托管开源（如 dots.ocr 需查各自协议）；云 API 属外部服务，需按 ASSET_BOUNDARIES.md 登记并确认数据出境立场。
-- 任何新引入第三方组件，须更新 THIRD_PARTY_NOTICES.md。
+- VLM 自托管开源（如 dots.ocr 需查代码、模型权重各自协议）；云 API 属外部服务，须按 [ASSET_BOUNDARIES.md](../ASSET_BOUNDARIES.md) 确认服务条款、语料处理权限与数据出境立场，仅调用服务不等于分发其实现或模型。
+- 新引入第三方组件统一按 [ASSET_BOUNDARIES.md「第三方登记判据」](../ASSET_BOUNDARIES.md#third-party-registration--第三方登记判据) 判断，并按其中的登记载体分工记录：**随仓库或发布物分发**的单独捆绑资产、后端二进制、OCR 模型文件及为具体功能装入运行镜像的独立 CLI/库须更新 `THIRD_PARTY_NOTICES.md` 并保留上游声明，不以所在目录划白名单。Go/npm 依赖树与基础镜像系统包按同一治理文档通过各自清单和上游包元数据追踪。由操作者独立按需安装、且不随仓库或发布物分发的系统级 CLI 通常不登记；改变分发方式时须重新核对。
