@@ -5,7 +5,12 @@ extract_text.py — 从数字原生 PDF 提取文本层（#120 选型参考的�
 数字原生 PDF 自带文本层，可直接提取精确的 Unicode 文本与坐标，不需要图像 OCR。
 这是 OCR 链路上性价比最高的一步：先判断 PDF 是否数字原生，若是则走文本层提取。
 
-依赖：系统安装 pdftotext（poppler-utils）。
+注意：若 PDF 文本层使用 CID 字符集合（如 Adobe-GB1，常见于中文排印），提取出的不是
+直接 Unicode，而是 CID 码位，需要 CMap 把 CID 映射到 Unicode。`pdftotext` 依赖
+poppler-data 提供这些 CMap；缺 poppler-data 时会报「Unknown character collection」并
+输出乱码（这是缺 CMap 的症状，不是「源 PDF 无法映射」，更不是「生僻字存在」的证据）。
+
+依赖：系统安装 pdftotext（poppler-utils）以及 poppler-data（CMap 数据，含 Adobe-GB1 等）。
 
 用法：
     python extract_text.py --pdf 输入.pdf --out 输出.txt [--first 1 --last 3]

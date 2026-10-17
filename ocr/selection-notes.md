@@ -14,7 +14,7 @@
 ## 候选方案对比
 
 ### 方案 1：数字原生 PDF 分流（pdftotext / pdfjs getTextContent）
-- 方言生僻字表现：极好（直接取 Unicode）
+- 方言生僻字表现：极好（有正确 CMap 时直接取 Unicode；见下方「乱码根因」）
 - 列还原表现：好（坐标聚类）
 - 部署契合度：极高（前端已随仓分发 PDF.js，后台运行镜像已包含 Poppler；在开发机或独立运行脚本时需另行安装，见 [外部依赖](README.md#外部依赖)）
 - 成本/耗时：最低
@@ -105,7 +105,9 @@
 
 ## 明确建议（可推翻）
 
-1. **第一阶段（本组当前）先做方案 1：数字原生 PDF 分流。** 本次交付的 `extract_text.py` 已确认文读字汇 PDF 有文本层（数字原生），可直接提取文本；但乱码（U+FFFD）与 PUA 占比待测，Unicode 可表示性仍按 #123 单独验收。这是整条链路上性价比最高的一步。
+1. **第一阶段（本组当前）先做方案 1：数字原生 PDF 分流。** 本次交付的 `extract_text.py` 已确认文读字汇 PDF 有文本层（数字原生）。但要正确提取到 Unicode，需注意其文本层用的是 Adobe-GB1 字符集合（CID 编码），必须经 CMap 映射；`pdftotext` 缺 poppler-data 时会报错并输出乱码，仓库 PDF.js 已自带 Adobe-GB1 CMap（见下方「乱码根因」）。这是整条链路上性价比最高的一步。
+
+> **乱码根因**：文读字汇 PDF 的文本层是 Adobe-GB1（CID 编码），不是直接 Unicode。`pdftotext` 提取时若缺 poppler-data 的 Adobe-GB1 CMap，会报 `Unknown character collection 'Adobe-GB1'` 并输出乱码——这是「缺 CMap」的症状，**不是**「源 PDF 无法映射」，**更不是**「生僻字存在」的证据。Adobe-GB1 有标准 CMap（poppler-data 的 `Adobe-GB1-UCS2` 与仓内 `frontend/public/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap` 都有），补上 CMap 即可正确映射到 Unicode 中文字符（如 CID `0x03ad` → U+963F「阿」）。
 
 2. **扫描版（无文本层）主推方案 5 + 6 组合：VLM 端到端解析 + 双引擎交叉验证。** 理由是：词典页面多无框线（列靠空白分隔），传统版面模型不稳；而 VLM 的"按词头/音读/释义三列输出，读不出用占位符，不要猜"指令天然解决分列，且适合当前"静态二进制后端"（只需发 HTTPS）。双引擎交叉验证用于压制 VLM 的幻觉（静默替换），与平台已有的"多人独立校对+仲裁"逻辑同构。
 

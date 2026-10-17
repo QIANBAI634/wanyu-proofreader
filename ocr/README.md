@@ -114,3 +114,4 @@ gold 表头顺序判定。不同物理字段表的语料应分别打分，报告
 
 - `extract_text.py` 依赖系统安装 `pdftotext`（poppler-utils，GPL-2.0-or-later），以外部命令调用，不 vendoring 或链接 Poppler 库。单独运行此脚本时按需独立安装并加入 `PATH`。
 - 第三方登记统一按 [ASSET_BOUNDARIES.md「第三方登记判据」](../ASSET_BOUNDARIES.md#third-party-registration--第三方登记判据) 的**是否随仓库或发布物分发**判断，适用于所有目录。独立运行脚本时由操作者另行安装的 CLI 不因该调用登记；后台运行镜像为页图预览分发 `poppler-utils` 和 `libwebp-tools` 包，这些分发依赖及其许可证已登记在 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)，须保留适用的上游声明。资料与派生资产的授权边界见 `ASSET_BOUNDARIES.md`。
+- **CMap 数据（poppler-data）**：提取使用 CID 字符集合（如 Adobe-GB1）编码的数字原生 PDF 时，`pdftotext` 需要 poppler-data 提供对应的 CMap（如 `Adobe-GB1-UCS2`）。缺 poppler-data 会报 `Unknown character collection` 并输出乱码——这是缺 CMap 的症状，不是源 PDF 无法映射，也不是生僻字存在的证据。仓库内 `frontend/public/pdfjs/cmaps/` 已 vendored Adobe-GB1 等 CMap，可作为 PDF.js 路径的映射源；poppler 侧需按发行版方式安装 poppler-data（如 Debian 的 `poppler-data` 包、或从 poppler.freedesktop.org 下载）。
