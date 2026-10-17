@@ -6,7 +6,7 @@
 
 ### 文件 1：文读字汇-正文.pdf
 - 大小：6.2 MB
-- 类型：数字原生 PDF（有文本层），但文本层用 Adobe-GB1 字符集合（CID 编码），需 CMap 映射到 Unicode。`pdftotext` 缺 poppler-data（Adobe-GB1 CMap）时会报 `Unknown character collection 'Adobe-GB1'` 并输出乱码；仓库 PDF.js 已自带该 CMap，补上即可正确提取。这是「数字原生分流」路线的真实边界案例。
+- 类型：数字原生 PDF（有文本层），但文本层用 Adobe-GB1 字符集合（CID 编码），需 CMap 映射到 Unicode。`pdftotext` 缺 poppler-data（Adobe-GB1 CMap）时会报 `Unknown character collection 'Adobe-GB1'` 并输出乱码；仓库 PDF.js 已自带该 CMap，补上后 Adobe-GB1 覆盖范围内的字符可正确提取（不含 CJK 扩展区生僻字，见「字符难点覆盖」）。这是「数字原生分流」路线的真实边界案例。
 - 对应标准答案：文读字汇.csv（10557 行）
 - 许可状态：待确认
 - 用途：数字原生分流验证（方案 1）
