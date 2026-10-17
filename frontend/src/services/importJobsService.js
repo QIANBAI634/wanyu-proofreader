@@ -43,6 +43,13 @@ export async function getImportJob(jobId) {
   })
 }
 
+export async function listImportLedger(projectId) {
+  return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/import-ledger`, {
+    method: 'GET',
+    requestKey: null
+  })
+}
+
 export async function listImportJobErrors(jobId, page = 1, perPage = 100) {
   return pb.collection('import_job_errors').getList(page, perPage, {
     filter: `job="${jobId}"`,

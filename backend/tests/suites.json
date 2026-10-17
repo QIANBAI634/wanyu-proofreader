@@ -22,6 +22,7 @@
   { "suite": "pdf_chunks_integration.mjs", "ci_matrix": false, "note": "also runs in core-workflows and the chunk-upload-browser job" },
   { "suite": "rare_characters_integration.mjs", "ci_matrix": false, "ci_runner": "run_rare_characters_integration.py", "note": "restarts the server to prove persistence" },
   { "suite": "source_registry_integration.mjs", "ci_matrix": true },
+  { "suite": "import_ledger_integration.mjs", "ci_matrix": true },
   { "suite": "column_roles_integration.mjs", "ci_matrix": true },
   { "suite": "gate_release_integration.mjs", "ci_matrix": true },
   { "suite": "blocked_reason_integration.mjs", "ci_matrix": true },
