@@ -232,7 +232,8 @@
         <template v-else-if="ledger">
           <div class="flex flex-wrap gap-4 text-sm mb-3">
             <span><strong>{{ ledger.summary.total_batches }}</strong> 批</span>
-            <span><strong>{{ ledger.summary.total_rows }}</strong> 行入册</span>
+            <span><strong>{{ ledger.summary.total_rows }}</strong> 行输入</span>
+            <span><strong>{{ ledger.summary.imported_rows }}</strong> 行入册</span>
             <span><strong>{{ ledger.summary.unknown_source_rows }}</strong> 行未知来源</span>
             <span v-if="ledger.summary.sources.length">
               来源覆盖：
@@ -249,9 +250,9 @@
                   <th>完成时间</th>
                   <th>文件名</th>
                   <th>状态</th>
-                  <th>总行数</th>
-                  <th>成功</th>
-                  <th>失败/跳过</th>
+                  <th>输入</th>
+                  <th>入库</th>
+                  <th>跳过/失败</th>
                   <th>来源</th>
                 </tr>
               </thead>
@@ -1547,6 +1548,7 @@ async function uploadCsv() {
       csvSuccess.value = '相同文件已经导入，无需重复处理。'
       await loadPages()
     }
+    await loadLedger()
   } catch (e) {
     csvError.value = getUploadErrorMessage(e, 'csv')
   } finally {
@@ -1584,7 +1586,7 @@ async function confirmCsvImport() {
     selectedPendingIds.value = []
     // 导入会改变条目总数，汇总必须跟着走：只刷表格的话，三枚分桶芯片与「共 N 条」
     // 会停在旧数字上，与正下方刚刷新出来的表格对不上账（#172 验收第 4 条问的就是这个数）。
-    await Promise.all([loadPages(), loadQualitySummary()])
+    await Promise.all([loadPages(), loadQualitySummary(), loadLedger()])
   } catch (e) {
     csvError.value = getPbMessage(e, '确认导入失败，请稍后重试。')
   } finally {
@@ -1612,6 +1614,7 @@ async function startOcrRecognition() {
     if (job.status === 'failed') {
       ocrError.value = job.error_message || '识别失败，请稍后重试。'
     }
+    await loadLedger()
   } catch (e) {
     ocrError.value = getPbMessage(e, '发起识别失败，请稍后重试。')
   } finally {

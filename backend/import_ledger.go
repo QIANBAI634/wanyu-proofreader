@@ -66,7 +66,8 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		return apis.NewBadRequestError("读取导入台账失败。", err)
 	}
 
-	// 来源覆盖：按来源聚合行数，无来源归入空来源（key 为空串）。
+	// 来源覆盖：按来源聚合「已提交终态的成功行」，无来源归入空来源（key 为空串）。
+	// 与 imported_rows 同一口径——预检通过但未 commit 的作业不产生条目，不能计入覆盖。
 	type sourceAgg struct {
 		LogicalID string `db:"logical_id"`
 		Title     string `db:"title"`
@@ -76,10 +77,11 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 	if err := s.app.DB().NewQuery(
 		`SELECT COALESCE(src.logical_id, '') AS logical_id,
 		        COALESCE(src.title, '') AS title,
-		        COALESCE(SUM(j.total_count), 0) AS rows
+		        COALESCE(SUM(j.success_count), 0) AS rows
 		 FROM import_jobs j
 		 LEFT JOIN sources src ON src.id = j.source
 		 WHERE j.project = {:project}
+		   AND j.status IN ('completed', 'completed_with_errors')
 		 GROUP BY 1, 2
 		 ORDER BY 3 DESC, 1`,
 	).Bind(params).All(&sourceAggs); err != nil {
@@ -87,15 +89,21 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 	}
 
 	// 三个数从批次列表就地汇总：批次数量级小，不需要再开一条聚合查询。
+	// 入册口径统一取「已提交终态的成功行」：预检通过但未 commit 的作业，其
+	// success_count 是预检时写的 ValidRows（尚未创建条目），不能算入册；
+	// total_count 又含被跳过的输入行，也不能当入册。
 	totalBatches := len(batches)
-	totalRows := 0
-	importedRows := 0
+	totalRows := 0    // 输入行数（所有批次 total_count 之和，含跳过）
+	importedRows := 0 // 入册行数（已提交终态批次 success_count 之和）
 	unknownSourceRows := 0
 	for _, b := range batches {
 		totalRows += b.TotalCount
+		if b.Status != "completed" && b.Status != "completed_with_errors" {
+			continue
+		}
 		importedRows += b.SuccessCount
 		if b.SourceLink == "" || b.SourceLink == "unknown" {
-			unknownSourceRows += b.TotalCount
+			unknownSourceRows += b.SuccessCount
 		}
 	}
 
