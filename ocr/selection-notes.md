@@ -107,7 +107,7 @@
 
 1. **第一阶段（本组当前）先做方案 1：数字原生 PDF 分流。** 本次交付的 `extract_text.py` 已确认文读字汇 PDF 有文本层（数字原生）。但要正确提取到 Unicode，需注意其文本层用的是 Adobe-GB1 字符集合（CID 编码），必须经 CMap 映射；`pdftotext` 缺 poppler-data 时会报错并输出乱码，仓库 PDF.js 已自带 Adobe-GB1 CMap（见下方「乱码根因」）。这是整条链路上性价比最高的一步。
 
-> **乱码根因**：文读字汇 PDF 的文本层是 Adobe-GB1（CID 编码），不是直接 Unicode。`pdftotext` 提取时若缺 poppler-data 的 Adobe-GB1 CMap，会报 `Unknown character collection 'Adobe-GB1'` 并输出乱码——这是「缺 CMap」的症状，**不是**「源 PDF 无法映射」，**更不是**「生僻字存在」的证据。补上 CMap（poppler-data 的 `Adobe-GB1-UCS2` 或仓内 `frontend/public/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap`）后，Adobe-GB1 **覆盖范围内**的字符能正确映射（如 CID `0x03ad` → U+963F「阿」）。**但 Adobe-GB1 的覆盖范围不含 CJK 扩展区生僻字**（𡳞 𨈘 𫉁 等位于 U+20000 之外，CMap 里没有对应），对这类字补 CMap 并不产生字形——所以「生僻字是否覆盖」的真值证据仍是 CSV 标准答案里实际含有的扩展区字符（见 `dataset-manifest.md`），最终以「提取文本 vs CSV」对账为准，不能把「补了 CMap」当作生僻字也能被正确提取。
+> **乱码根因**：文读字汇 PDF 的文本层是 Adobe-GB1（CID 编码），不是直接 Unicode。`pdftotext` 提取时若缺 poppler-data 的 Adobe-GB1 CMap，会报 `Unknown character collection 'Adobe-GB1'` 并输出乱码——这是「缺 CMap」的症状，**不是**「源 PDF 无法映射」，**更不是**「生僻字存在」的证据。补上 CMap（poppler-data 的 `Adobe-GB1-UCS2` 或仓内 `frontend/public/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap`）后，Adobe-GB1 **fallback 覆盖范围内**的字符能正确映射（如 CID `0x03ad` → U+963F「阿」）。但 Adobe-GB1 的 fallback CMap **并非覆盖全部 CJK 扩展区**：它确能映射扩展区的一部分（实测 㑳 U+3473 扩展 A、𠂇 U+20087 扩展 B 可正确提取），而 𡳞 𨈘 𫉁 等不在 fallback 映射中；此外，PDF 若嵌入了 ToUnicode 映射，即使 CID 不在 fallback CMap 里也能正确提取。因此「补了 CMap」只保证 fallback 范围内的字符，**具体生僻字能否提取取决于该 CID 的 fallback 映射与 PDF 是否带嵌入 ToUnicode**，不能一概而论——「生僻字是否覆盖」的真值证据仍是 CSV 标准答案里实际含有的扩展区字符（见 `dataset-manifest.md`），最终以「提取文本 vs CSV」对账为准，不能把「补了 CMap」当作所有生僻字都能被正确提取。
 
 2. **扫描版（无文本层）主推方案 5 + 6 组合：VLM 端到端解析 + 双引擎交叉验证。** 理由是：词典页面多无框线（列靠空白分隔），传统版面模型不稳；而 VLM 的"按词头/音读/释义三列输出，读不出用占位符，不要猜"指令天然解决分列，且适合当前"静态二进制后端"（只需发 HTTPS）。双引擎交叉验证用于压制 VLM 的幻觉（静默替换），与平台已有的"多人独立校对+仲裁"逻辑同构。
 
