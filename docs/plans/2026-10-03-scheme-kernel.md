@@ -120,6 +120,7 @@ normalization_status / normalization_rule_version / normalization_trace
 ## #190 需要在这个包之上补什么
 
 - 存储：`normalization_*` 字段落库与迁移（本包不碰 schema）；
+  - `normalization_rule_version` 上**不建索引**：「规则升版后列出受影响记录」是升版那一刻才跑一次的罕见查询，不值得让 pages（导入热路径）的每次插入都维护它。需要时按项目全表扫：`project = ? && normalization_rule_version = ?`，属**离线查询**，不在任何请求路径上；
 - 作业面：`conversion_jobs`、批次游标、四行汇总；
 - 复核队列：`AMBIGUOUS` 的 `candidates` 与 `trace` 已经在结果里，队列只是把它们摊开给人看；
 - 反哺：人工结论写回 `exceptions`，本包的 `REVIEWED` 状态与 `basis` 字段就是为此留的形状。写回的通道必须经过本包的加载与校验——例外值是全场唯一在运行时不做清单核对的出口（理由见流水线第 5 级），绕过校验直接改文件就等于把 `EXACT` 发给一个拼错的值；

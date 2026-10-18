@@ -107,6 +107,11 @@ jobs:
         run: python3 scripts/check_line_endings.py
       - name: UI debt ratchet
         run: python3 scripts/check_ui_debt.py
+      - name: Docker build context
+        # 与 `make verify-static` 同一个入口。这条兜的是「本机与 CI 的 Go 构建都看不见、
+        # 只有容器构建会报错」的那一类缺口：Dockerfile 的 builder 是白名单 COPY，
+        # 新加的 Go 包目录忘了加进去时，本机 80 多项检查全绿而镜像构建立刻失败。
+        run: python3 scripts/check_docker_build_context.py
 
   pocketbase-compatibility:
     name: PocketBase compatibility (${{ matrix.suite }})
@@ -156,7 +161,10 @@ jobs:
       - name: Integration suite with a race-detected server
         env:
           SUITE: ${{ matrix.suite }}
-        run: python3 backend/tests/run_integration.py "${SUITE}_integration.mjs" --race
+        # race 检测下服务端约慢一个量级，1200 行导入在共享 runner 上会贴边撞 20s 的等待预算。
+        # 给 upload_jobs 的 waitFor 更高预算；task_leases 不读这个变量，不受影响。等待的是
+        # 终态而非正确性，见 upload_jobs_integration.mjs 里 waitFor 的注释。
+        run: python3 backend/tests/run_integration.py "${SUITE}_integration.mjs" --race --env IMPORT_WAIT_TIMEOUT_MS=120000
 
   seed-demo:
     name: Demo seed remains runnable
@@ -367,6 +375,57 @@ jobs:
           path: output/playwright/quality-state/*.png
           if-no-files-found: ignore
 
+  scheme-conversion-browser:
+    name: Scheme conversion admin screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Build the SPA for same-origin API calls
+        run: |
+          npm --prefix frontend ci
+          VITE_PB_URL=http://localhost npm --prefix frontend run build
+      - name: Install browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/scheme-browser" playwright@1.62.1
+          "$RUNNER_TEMP/scheme-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Capture the conversion summary and the review queue
+        env:
+          NODE_PATH: ${{ runner.temp }}/scheme-browser/node_modules
+        run: python3 backend/tests/run_scheme_conversion_browser.py
+      - name: Verify every screenshot exists and is non-trivial
+        if: success()
+        run: |
+          # 名字与 scheme_conversion_browser_integration.mjs 的清单一一对应。
+          # 没设 SCHEME_BROWSER_SCRIPT 时套件会退出 0，只有这里能发现产物不存在。
+          for state in scheme-summary-and-queue scheme-review-page-two scheme-review-draft scheme-review-done scheme-review-unsupported; do
+            test -s "output/playwright/scheme-conversion/${state}.png" || {
+              echo "Missing or empty scheme conversion screenshot: ${state}.png" >&2
+              exit 1
+            }
+          done
+      - name: Attach scheme conversion screenshots
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scheme-conversion-admin
+          path: output/playwright/scheme-conversion/*.png
+          if-no-files-found: error
+      - name: Attach scheme conversion screenshots after failure
+        if: ${{ always() && !success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: scheme-conversion-admin
+          path: output/playwright/scheme-conversion/*.png
+          if-no-files-found: ignore
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -455,6 +514,8 @@ jobs:
         run: python3 backend/tests/check_migrations.py
       - name: Backend guard and tooling unit tests
         run: python3 -m unittest discover -s backend/tests -p 'test_*.py'
+      - name: Verify scheme conversion jobs, review queue and restart resume
+        run: python3 backend/tests/run_scheme_conversion_integration.py
       - name: Verify Unicode import, proofreading, arbitration and restart persistence
         run: python3 backend/tests/run_rare_characters_integration.py
       - name: Verify Review Bundle import idempotency and restart recovery
@@ -683,6 +744,7 @@ jobs:
       - chunk-upload-browser
       - assist-browser
       - quality-state-browser
+      - scheme-conversion-browser
       - frontend
       - frontend-image-parity
       - backend-unicode

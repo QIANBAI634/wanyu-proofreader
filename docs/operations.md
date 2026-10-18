@@ -381,3 +381,42 @@ node_modules（`npm root -g` 里未必有，指向它会 `Cannot find module`）
 且层级当场落 C）、`blocked-conclusion-no-permission`（项目管理员看得到「机器疑点」
 但看不到这一节，同时接口对他是真 403）。第二张必须是点出来的而不是夹具预置的，
 否则它证明的只是"前端会渲染一行字"。
+
+## 拼音归一的规则目录（FANGJI_SCHEME_ADAPTER_DIR）
+
+管理端「拼音归一」的规则来自一个目录，路径由环境变量 `FANGJI_SCHEME_ADAPTER_DIR` 给出，
+目录里每个 `*.json` 是一套方案（`backend/scheme` 的 `LoadAdapter` 格式）。目录**刻意没有默认值**
+（#193/#195 的教训：写死的默认路径会把某个人的本机目录带进生产），所以运维必须显式给：
+
+```yaml
+# compose 里给 backend 服务
+environment:
+  FANGJI_SCHEME_ADAPTER_DIR: /data/scheme-adapters
+volumes:
+  - ./scheme-adapters:/data/scheme-adapters:ro
+```
+
+行为分三种，**都不需要猜**：
+
+- **没配**（变量为空）：不是错误，是「本实例还没有可用方案」这个合法状态。服务正常起来，
+  管理端概览会显示一句写明该变量的提示，发起转换会被 400 拒绝。启动日志打
+  `scheme_registry_empty`。
+- **配了且文件都合法**：启动日志打 `scheme_registry_loaded`，带上目录与方案个数。
+- **配了但有文件不合法**：**进程直接起不来**（`log.Fatal`）。这是刻意的（#189：非法即启动报错，
+  不要静默半生效）：半套规则在跑比不跑更危险——同一批条目会按两套规则得出不同结论，而界面上
+  看不出区别。下面几种都算不合法，报错里会点名文件名：JSON 解析失败、缺 `rule_status` 或取值
+  不是 `test`/`production`、声明 `production` 却没给 `rule_status_basis`、两套方案同名、
+  规则里引用了目标清单以外的音。**修复方式是改文件或改路径，不是放宽校验**。
+
+两个运维上要知道的语义：
+
+- **改动要重启才生效。** 规则在服务启动时一次性读进内存（所以日志里那两行只打一次）。
+  换目录、换文件、甚至只改 `rule_version`，都要重启 backend 容器。作业**续跑**时会比对
+  `source_scheme`/`canonical_scheme`/`rule_version` 三项：对不上就以
+  `CONVERSION_RULE_VERSION_CHANGED` 收尾，提示重新发起作业，而不是拿新规则接着跑旧作业。
+- **`rule_status` 是道闸。** 只有声明 `rule_status: "production"` 的方案能创建真实转换作业；
+  声明 `test` 的方案（规则、清单或依据是合成的）一律被 400 拒绝，拒绝理由会点名方案并说明
+  真实方案由 #189 交付。所以「配了一份测试文件上去」不会被误当成能跑真作业——它连作业都建不出来。
+
+判断当前实例到底载入了什么，看管理端方案清单（`GET /api/fangji/scheme-adapters`）：每套方案带
+`source_scheme_id`、`rule_version`、`rule_status`，以及没有目录时的那条 `notice`。

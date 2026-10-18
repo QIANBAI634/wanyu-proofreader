@@ -118,6 +118,8 @@ type importService struct {
 	mu           sync.Mutex
 	pending      map[string]struct{}
 	pdfUploads   *pdfUploadPool
+	// schemes 是启动时载入的拼音规则表（#190）。载入后不变，因此读它不需要加锁。
+	schemes *schemeRegistry
 }
 
 func newImportService(app *pocketbase.PocketBase) *importService {
@@ -552,6 +554,44 @@ func (s *importService) finishWork(work importWork) {
 	s.mu.Unlock()
 }
 
+// workRoute 把「谁能处理这个 kind」与「它失败时终态写到哪个集合」放在同一处。
+//
+// 这两件事以前分别写在 runWorker 的 switch 与 markFatal 的 if 链里，两边可以各自漂：
+// 只给 runWorker 加一个 kind，panic 兜底就会去错的集合里找记录，查不到时只留一条
+// fatal_record_lookup_failed 日志，作业永远停在 processing——conversion 遇到这个还有
+// 二次代价（idx_conversion_jobs_active 是 `status IN ('queued','processing')` 的部分唯一
+// 索引，该项目此后每次发起转换都拿 409，管理员只能靠重启进程恢复，见 markFatal）。
+// 合成一张表后，「能入队但没有兜底」这个状态不存在了。
+//
+// #190 的 conversion 与导入共用这一条**串行**队列，是刻意的：一条 worker、先进先出，
+// 所以同一时刻只有一个作业在跑，一次转换不会和一次导入抢同一批 pages。代价是排队——
+// 一本两万条的转换排在一次全量导入后面，要等前面那条跑完才开始，管理端看到的
+// 「已排队」就是这件事。触发拆分的判据不是「队列里有两种作业」，而是 #94 的实测：
+// 两万条转换与两万条导入同时在场、排队时长真的成了用户能感觉到的问题时，再按 kind
+// 分池。owner 明确不要求现在拆（#289 评审），所以这里保留共用，把语义写下来。
+type workRoute struct {
+	process func(*importService, importWork)
+	// collection 是失败终态要写的集合；空串表示这个 kind 的作业记录形状与 import_jobs
+	// 不同，由它自己的收尾函数处理（conversion → markConversionFatal）。
+	collection string
+}
+
+// 在 init 里赋值而不是写成带初始化表达式的 var：表里的方法表达式会引用那些方法，
+// 而其中几个方法体又调 markFatal，markFatal 又读这张表——写成 var 初始化式就是一条
+// 包级初始化环（编译期报 initialization cycle），init 函数体不参与那个依赖分析。
+var workRoutes map[string]workRoute
+
+func init() {
+	workRoutes = map[string]workRoute{
+		"csv_inspect": {(*importService).processCSVInspection, "import_jobs"},
+		"csv":         {(*importService).processCSV, "import_jobs"},
+		"pdf":         {(*importService).processPDF, "project_files"},
+		"ocr":         {(*importService).processOCR, "import_jobs"},
+		"bundle":      {(*importService).processBundle, "import_jobs"},
+		"conversion":  {(*importService).processConversion, ""},
+	}
+}
+
 func (s *importService) runWorker() {
 	for work := range s.queue {
 		func() {
@@ -583,18 +623,18 @@ func (s *importService) runWorker() {
 					s.markFatal(work, "WORKER_PANIC", "服务器处理文件时发生内部错误。", panicErr)
 				}
 			}()
-			switch work.kind {
-			case "csv_inspect":
-				s.processCSVInspection(work)
-			case "csv":
-				s.processCSV(work)
-			case "pdf":
-				s.processPDF(work)
-			case "ocr":
-				s.processOCR(work)
-			case "bundle":
-				s.processBundle(work)
+			route, known := workRoutes[work.kind]
+			if !known {
+				// 队列里的 kind 只由 enqueue 写入，落到这里说明表与 enqueue 漂了。
+				// 不能静默跳过：那样作业会永远停在 queued，而且没有任何日志解释。
+				logUpload("error", "worker_unknown_kind", map[string]any{
+					"request_id": work.requestID,
+					"kind":       work.kind,
+					"record_id":  work.id,
+				})
+				return
 			}
+			route.process(s, work)
 		}()
 	}
 }
@@ -630,6 +670,24 @@ func (s *importService) recoverPendingWork() {
 		}
 	}
 
+	conversions, err := s.app.FindRecordsByFilter(
+		"conversion_jobs",
+		`status = "queued" || status = "processing"`,
+		"created",
+		10000,
+		0,
+	)
+	if err != nil {
+		logUpload("error", "recovery_query_failed", map[string]any{
+			"kind":  "conversion",
+			"error": err.Error(),
+		})
+	} else {
+		for _, job := range conversions {
+			s.enqueue(importWork{kind: "conversion", id: job.Id, requestID: "recovery-" + job.Id})
+		}
+	}
+
 	files, err := s.app.FindRecordsByFilter(
 		"project_files",
 		`status = "processing"`,
@@ -648,17 +706,32 @@ func (s *importService) recoverPendingWork() {
 		}
 	}
 	logUpload("info", "recovery_scan_completed", map[string]any{
-		"csv_jobs":  len(jobs),
-		"pdf_files": len(files),
+		"csv_jobs":    len(jobs),
+		"pdf_files":   len(files),
+		"conversions": len(conversions),
 	})
 }
 
 func (s *importService) markFatal(work importWork, code, message string, cause error) {
-	collection := "import_jobs"
-	if work.kind == "pdf" {
-		collection = "project_files"
+	// 集合从 workRoutes 读，与 runWorker 的分派同一份事实（见 workRoutes 的注释）。
+	// conversion 那一格是空串：它的记录在 conversion_jobs，形状与 import_jobs 不同
+	// （有自己的 finished_at 与错误列语义），整支交给它自己的收尾函数。
+	route, known := workRoutes[work.kind]
+	if !known {
+		logUpload("error", "fatal_unknown_kind", map[string]any{
+			"request_id": work.requestID,
+			"kind":       work.kind,
+			"record_id":  work.id,
+			"error_code": code,
+			"cause":      errorText(cause),
+		})
+		return
 	}
-	record, err := s.app.FindRecordById(collection, work.id)
+	if route.collection == "" {
+		s.markConversionFatal(work, code, message, cause)
+		return
+	}
+	record, err := s.app.FindRecordById(route.collection, work.id)
 	if err != nil {
 		logUpload("error", "fatal_record_lookup_failed", map[string]any{
 			"request_id": work.requestID,

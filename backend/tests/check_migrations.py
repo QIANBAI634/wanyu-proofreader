@@ -141,6 +141,40 @@ SPECS = {
             'blocked_reason_note': {'required': False},
         }),
     },
+    # #190 的两把查询：复核队列按 (project, normalization_status) 筛，
+    # 作业侧按 project 找当前活跃的那个。fields 断言钉住 required=False——
+    # 这些列在转换跑过之前都是空的，设成必填会让所有既有创建路径在校验期失败。
+    #
+    # 队列那条计划断言按**生产查询的形状**写：listNormalizations 是
+    # FindRecordsByFilter("pages", filter, "page_number,id", size, offset, params)，
+    # 带 ORDER BY 与 LIMIT/OFFSET。原来是「WHERE project=? AND normalization_status=?」
+    # 这种不带排序的形状，而那种形状下 SQLite 根本不用这条索引——它选
+    # idx_pages_project_page_number，再为 ORDER BY 现搭临时 B 树。断言写成不带排序的
+    # 形状，等于给一条没人用的索引背书：两列版本在 CI 上是绿的，在生产上没生效。
+    '1789200700_scheme_conversion.js': {
+        'indexes': ['idx_pages_normalization_queue',
+                    'idx_conversion_jobs_active', 'idx_conversion_jobs_project'],
+        'plans': [
+            ('pages',
+             'SELECT id FROM pages WHERE project=? AND normalization_status=? '
+             'ORDER BY page_number, id LIMIT 25 OFFSET 0',
+             ('p', 'AMBIGUOUS'), 'idx_pages_normalization_queue'),
+            ('conversion_jobs',
+             "SELECT id FROM conversion_jobs WHERE project=? AND status IN ('queued','processing')",
+             ('p',), 'idx_conversion_jobs_active'),
+        ],
+        'collection_indexes': ('pages', 'idx_pages_normalization_queue'),
+        'fields': ('pages', {
+            'normalization_status': {'required': False, 'values_contains': 'REVIEWED'},
+            # max 与 backend/scheme_conversion.go 的 canonicalPronunciationMaxLength 必须相等：
+            # 不等就会出现「界面拦得住、直接调接口存不进」这种只碰得到一半的差别。
+            'canonical_pronunciation': {'required': False, 'max': 200},
+            'normalization_basis': {'required': False},
+            'normalization_source_column': {'required': False},
+            # 转换时抄下的源值副本。刻意没有 max——它是源单元格的副本，源列本身无上限。
+            'normalization_source_snapshot': {'required': False},
+        }),
+    },
     '1789200300_project_artifacts.js': {
         'indexes': ['idx_project_artifacts_project'],
         'plans': [
@@ -274,9 +308,9 @@ def assert_absent(data, migration, problems, context):
 
 
 def _assert_fields(data, migration, field_spec, problems, expect):
-    """验证 _collections 里字段元数据（required / values），供只改字段的迁移使用。
+    """验证 _collections 里字段元数据（required / values / max），供只改字段的迁移使用。
 
-    field_spec 形如 (collection, {field_name: {'required': bool, 'values_contains': str}})。
+    field_spec 形如 (collection, {field_name: {'required': bool, 'values_contains': str, 'max': int}})。
     expect=True 表示应用迁移后应满足这些条件；expect=False 表示回滚后应不满足。
 
     回滚方向上「集合或字段根本不存在」是**通过**而不是失败：往 collections 上追加字段的迁移，
@@ -307,6 +341,17 @@ def _assert_fields(data, migration, field_spec, problems, expect):
                 state = 'applied' if expect else 'rolled back'
                 problems.append(
                     f'{migration}: {collection}.{field_name}.required should be {want} when {state}, got {actual}')
+        if 'max' in conditions:
+            # 长度上限也是契约的一部分：#190 的 canonical_pronunciation 上限在迁移与
+            # handler 里各写了一份，对不上就是「界面拦得住、直接调接口存不进」。
+            # 没写 max 的文本字段在 PocketBase 里存的不是 0 而是缺省，所以这里用 get。
+            actual = target.get('max')
+            want = conditions['max']
+            ok = (actual == want) if expect else (actual != want)
+            if not ok:
+                state = 'applied' if expect else 'rolled back'
+                problems.append(
+                    f'{migration}: {collection}.{field_name}.max should be {want} when {state}, got {actual}')
         if 'values_contains' in conditions:
             actual_values = target.get('values', [])
             want = conditions['values_contains']

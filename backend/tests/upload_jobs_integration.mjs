@@ -28,14 +28,32 @@ async function request(path, { method = 'GET', token = '', body, expected = 200 
   return payload
 }
 
-async function waitFor(path, token, terminalStatuses, timeoutMs = 20_000) {
+async function waitFor(path, token, terminalStatuses, timeoutMs = Number(process.env.IMPORT_WAIT_TIMEOUT_MS) || 20_000) {
+  // 默认 20s 是本机/常规 CI 下「一次导入应能到终态」的合理预算；race 检测下服务端约慢一个
+  // 量级，1200 行的导入在共享 runner 上会贴边超时。CI 的 race-integration 作业通过
+  // `--env IMPORT_WAIT_TIMEOUT_MS` 给它更高预算。这不是掩盖回归：这里只在等一个**终态**
+  // （completed / completed_with_errors / failed），真正的回归要么让作业落到 failed、要么
+  // 让后面的 success_count / failed_count 断言失败——那两种情况都不是「等得更久」能救的。
+  //
+  // 于是「等超时」这一条路必须把两件事说清楚，否则预算被调大之后它就成了一句无法行动的话：
+  //   ① 最后一次读到的状态是什么（「没到终态、停在 processing」与「到了别的终态」处置不同）；
+  //   ② 用的是多少预算（是默认 20s 还是 CI 传进来的那个数）。
+  // 预算越大，超时越可能只是慢；在这里把两个事实打出来，读日志的人不必再去翻 env。
   const deadline = Date.now() + timeoutMs
+  let last = null
   while (Date.now() < deadline) {
-    const record = await request(path, { token })
-    if (terminalStatuses.includes(record.status)) return record
+    last = await request(path, { token })
+    if (terminalStatuses.includes(last.status)) return last
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
-  throw new Error(`Timed out waiting for ${path}`)
+  const waited = `${timeoutMs}ms${process.env.IMPORT_WAIT_TIMEOUT_MS ? '（来自 IMPORT_WAIT_TIMEOUT_MS）' : '（默认预算）'}`
+  if (!last) throw new Error(`等 ${path} 的终态超时：${waited} 内一次都没读成功`)
+  throw new Error(
+    `等 ${path} 的终态超时：预算 ${waited}，最后读到的状态是 ${last.status}，` +
+    `等的是 ${terminalStatuses.join(' / ')}。` +
+    '停在非终态说明作业还在跑或已经卡住（看服务端日志的 work_started/work_finished）；' +
+    '若它已经落到别的终态，那是作业本身的问题，加预算不会让它变成期望的那个状态。'
+  )
 }
 
 function minimalPdf(pageCount = 1, paddingBytes = 0) {

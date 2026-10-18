@@ -43,6 +43,36 @@ const (
 	ToneCategory = "tone_category"
 )
 
+// RuleStatus is the two-valued declaration every rule file must make. There is
+// no third state and no default: see Adapter.RuleStatus for why the safe value
+// must not be the one you get by writing nothing.
+const (
+	// RuleStatusTest marks a rule set that exists to exercise the engine. It
+	// loads, it converts, and it may not create a job against real project data.
+	RuleStatusTest = "test"
+	// RuleStatusProduction marks a rule set that may, and requires a written
+	// basis saying where the rules and the source documentation came from — the
+	// provenance #190's first acceptance condition asks for by name.
+	RuleStatusProduction = "production"
+)
+
+// RealJobSchemaVersion is the adapter contract a real conversion job requires:
+// #189's `source notation → documented IPA → target notation`. Schema version 1
+// is the older direct `from → to` jump with no IPA slot at all, so a v1 file
+// carries no evidence of the two-step judgement no matter what it declares about
+// itself. Until #189 ships version 2 every rule file here is version 1 and is
+// therefore test-only; the disposable integration binary opts in to running one
+// through a build tag, and a production build never carries that tag.
+const RealJobSchemaVersion = 2
+
+// MayDriveRealJobs is the declaration half of the gate. It answers only what the
+// rule file says about itself, which is not enough on its own: what the file says
+// can be edited. The caller combines this with the contract check in
+// jobAdapter, and production builds further require RealJobSchemaVersion.
+func (a *Adapter) MayDriveRealJobs() bool {
+	return a.RuleStatus == RuleStatusProduction
+}
+
 // Segment is one row of the reviewable mapping table.
 type Segment struct {
 	ID      string   `json:"id"`
@@ -105,6 +135,25 @@ type Adapter struct {
 	CanonicalScheme  string `json:"canonical_scheme_id"`
 	RuleVersion      string `json:"rule_version"`
 	AnnotationSystem string `json:"annotation_system"`
+
+	// RuleStatus says whether this rule set may drive a job against real project
+	// data, and RuleStatusBasis is the written provenance a production rule set
+	// has to carry. The gate that reads them lives at the call site
+	// (scheme_conversion.go): this package holds no policy and touches no
+	// database, so it validates the declaration and leaves the decision to the
+	// caller.
+	//
+	// It is a required string rather than a `test_only` bool on purpose, and the
+	// reason is the failure it has to survive. Every rule set shipped here today
+	// is synthetic — no book's 凡例 has been transcribed into a source inventory
+	// yet, that is #189 — and a synthetic value written into
+	// pages.canonical_pronunciation is indistinguishable downstream from a real
+	// one: it is exported, shipped, and read as the canonical scheme. A bool
+	// cannot tell "absent" from "false", so a fixture that forgot to mark itself
+	// would silently become eligible for real jobs. A required declaration cannot
+	// be forgotten: validate() rejects a file that does not say which it is.
+	RuleStatus      string `json:"rule_status"`
+	RuleStatusBasis string `json:"rule_status_basis,omitempty"`
 
 	Source     Inventory     `json:"source"`
 	Canonical  Inventory     `json:"canonical"`
@@ -171,6 +220,16 @@ func (a *Adapter) validate() error {
 		return ErrInvalidRule{Reason: fmt.Sprintf(
 			"annotation_system %q cannot be handled by this engine; %s marks tone classes, not values",
 			a.AnnotationSystem, ToneCategory)}
+	case a.RuleStatus != RuleStatusTest && a.RuleStatus != RuleStatusProduction:
+		// Refusing to guess here is the whole point: a file that omits
+		// rule_status must not load at all, because the alternative is a
+		// synthetic rule set quietly inheriting whatever the default is.
+		return ErrInvalidRule{Reason: fmt.Sprintf(
+			"rule_status must be %q or %q, got %q: a rule set has to say whether it may drive real conversion jobs",
+			RuleStatusTest, RuleStatusProduction, a.RuleStatus)}
+	case a.RuleStatus == RuleStatusProduction && a.RuleStatusBasis == "":
+		return ErrInvalidRule{Reason: "rule_status_basis is required for a production rule set: " +
+			"it has to record where its rules and its source documentation came from"}
 	}
 	if len(a.Source.ToneValues) == 0 || len(a.Canonical.ToneValues) == 0 {
 		return ErrInvalidRule{Reason: "both inventories must declare their tone values"}

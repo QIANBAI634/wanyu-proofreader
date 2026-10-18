@@ -295,6 +295,18 @@ func TestLoadAdapterRefusesUntrustworthyRuleFiles(t *testing.T) {
 		{"empty canonical inventory", func(d map[string]interface{}) {
 			d["canonical"] = map[string]interface{}{"onsets": []string{}, "rimes": []string{}, "tone_values": []string{}}
 		}, "must declare"},
+		// rule_status 必须**写出来**，这是它跟一个 bool 的全部差别所在。
+		// 不写就加载不了，所以没有哪个夹具能"忘了标自己"然后悄悄拿到跑真实作业的资格。
+		{"no rule status declared at all", func(d map[string]interface{}) {
+			delete(d, "rule_status")
+		}, "rule_status must be"},
+		{"a rule status this build does not know", func(d map[string]interface{}) {
+			d["rule_status"] = "maybe"
+		}, "rule_status must be"},
+		// production 是「可以跑真实作业」，那句话得带上出处，否则它只是个更响亮的 test。
+		{"a production rule set with no stated basis", func(d map[string]interface{}) {
+			d["rule_status"] = RuleStatusProduction
+		}, "rule_status_basis is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,4 +329,81 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestMayDriveRealJobsAnswersOnlyForProduction 钉住闸门读的那一个判据本身。
+// 未识别的取值也要答 false：validate() 已经不会让这种文件加载进来，这里是第二把锁——
+// 「不认识」必须落在拒绝那一侧，否则将来加取值时漏改一处就会默认放行。
+func TestMayDriveRealJobsAnswersOnlyForProduction(t *testing.T) {
+	cases := map[string]bool{
+		RuleStatusTest:       false,
+		RuleStatusProduction: true,
+		"":                   false,
+		"PRODUCTION":         false,
+		"maybe":              false,
+	}
+	for status, want := range cases {
+		adapter := &Adapter{RuleStatus: status}
+		if got := adapter.MayDriveRealJobs(); got != want {
+			t.Errorf("rule_status %q: MayDriveRealJobs() = %v, want %v", status, got, want)
+		}
+	}
+}
+
+// TestNormalizeCanonicalIsTheOnlyThingBetweenATypoAndAHumanConclusion 覆盖 #190
+// decideNormalization 的第二道闸。人工结论里的写法不是流水线产出的，是人敲进去的，
+// 而这条结论会被重跑保护、会被导成规则草案——一个拼错的音节一旦写进去就会一直留在那儿。
+func TestNormalizeCanonicalIsTheOnlyThingBetweenATypoAndAHumanConclusion(t *testing.T) {
+	// 合成夹具的目标侧清单：声母 b/d/g/ʃ，韵母 e/u/ə，调值 533/21/4。
+	adapter := load(t, "adapter_synthetic.json")
+	cases := []struct {
+		name    string
+		value   string
+		want    string
+		problem string
+		// 拒绝理由要不要点名目标方案。「空」那一类不该点：没有一个待拼的音节，
+		// 说「拼不出来」反倒是在解释一件没发生的事。
+		namesScheme bool
+	}{
+		{"a legal syllable", "bu533", "bu533", "", false},
+		{"a legal multi-syllable value", "bu533de21", "bu533de21", "", false},
+		{"a zero onset is legal", "e533", "e533", "", false},
+		{"surrounding whitespace is trimmed, not rejected", "  bu533\t", "bu533", "", false},
+		{"empty", "", "", "不能为空", false},
+		{"whitespace only", "   ", "", "不能为空", false},
+		{"an onset the target cannot spell", "za533", "", "不是", true},
+		{"a rime the target cannot spell", "ba533", "", "不是", true},
+		{"a tone the target cannot spell", "be9", "", "不是", true},
+		{"a syllable the target cannot split at all", "be533x", "", "不是", true},
+		{"letters lost upstream (two tones in a row)", "be53321", "", "不是", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := adapter.NormalizeCanonical(tc.value)
+			if tc.problem == "" {
+				if err != nil {
+					t.Fatalf("NormalizeCanonical(%q) refused: %v", tc.value, err)
+				}
+				if got != tc.want {
+					t.Fatalf("NormalizeCanonical(%q) = %q, want %q", tc.value, got, tc.want)
+				}
+				// 返回的值必须是能存进库的那一个：调用方直接拿它去 Set，
+				// 返回去空白而库里留着空白就成了两套写法。
+				if _, ok := adapter.parseCanonical(got); !ok {
+					t.Fatalf("returned %q, which the target scheme then cannot parse", got)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("NormalizeCanonical(%q) = %q, want a refusal mentioning %q", tc.value, got, tc.problem)
+			}
+			if !strings.Contains(err.Error(), tc.problem) {
+				t.Fatalf("refused for the wrong reason: %v (want mention of %q)", err, tc.problem)
+			}
+			// 拒绝时必须给出一句能照着改的话：名单里有什么才是复核人要的信息。
+			if tc.namesScheme && !strings.Contains(err.Error(), adapter.CanonicalScheme) {
+				t.Errorf("refusal does not name the target scheme: %v", err)
+			}
+		})
+	}
 }

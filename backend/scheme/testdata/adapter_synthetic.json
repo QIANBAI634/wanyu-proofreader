@@ -4,7 +4,9 @@
   "canonical_scheme_id": "synthetic-canonical",
   "rule_version": "synthetic-v1",
   "annotation_system": "tone_value",
+  "rule_status": "test",
   "comment": "合成规则文件，不是莆仙任何一套真实方案。真实方案要等 #114 点名的莆仙乡音社清单到手，届时只替换本文件、不改引擎。",
+  "rule_status_comment": "rule_status=test 是这份文件的实情：规则、清单与每条 basis 都是合成的。因此它不能创建真实转换作业（见 scheme.MayDriveRealJobs 与 backend/scheme_conversion.go 的闸门），只能用于测试。真实方案由 #189 交付，届时那份文件写 rule_status=production 并给出 rule_status_basis。",
   "source": {
     "onsets": [
       "p",

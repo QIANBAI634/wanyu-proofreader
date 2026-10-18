@@ -4,6 +4,7 @@
   "canonical_scheme_id": "synthetic-canonical",
   "rule_version": "synthetic-illegal-rewrite-v1",
   "annotation_system": "tone_value",
+  "rule_status": "test",
   "comment": "故意写错的一条上下文规则：把韵母改写成目标方案清单里没有的 ɨ。它能在加载时通过校验（改写只在特定邻接下才触发，静态证明不了），所以必须被目标合法性检查挡下来。",
   "source": {
     "onsets": ["p"],

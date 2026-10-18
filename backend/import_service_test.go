@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"log"
 	"os"
@@ -515,5 +516,123 @@ func TestPDFValidatorMarkerMatchesRequiredModule(t *testing.T) {
 	}
 	if want := "pdfcpu " + version; pdfValidator != want {
 		t.Fatalf("validation_tool provenance is stale: pdfValidator = %q, want %q", pdfValidator, want)
+	}
+}
+
+// addConversionJobsCollection 把 conversion_jobs 按迁移 1789200700_scheme_conversion.js
+// 的形状补进测试库。
+//
+// 为什么必须手抄：newSchemaTestApp 只 import 初始快照（1788940000），不跑后续迁移——
+// 那是给 schema 与安全边界用的（见它的注释）。手抄的取值必须与迁移一致：status 的取值表
+// 来自该文件 :27 的 JOB_STATUSES，error_code 在 :91 是 type:"text"（**不是**带固定取值
+// 表的 select），所以 WORKER_PANIC 这个值不会撞枚举。迁移收窄了取值表而这里没跟上时，
+// 本测试会以「Save 失败 / 状态没变」的形式红，而不是静默放过。
+func addConversionJobsCollection(t testing.TB, app *pocketbase.PocketBase) *core.Collection {
+	t.Helper()
+	conversionJobs := &core.Collection{
+		Name: "conversion_jobs",
+		Type: core.CollectionTypeBase,
+		Fields: core.NewFieldsList(
+			&core.TextField{Name: "project"},
+			&core.SelectField{Name: "status", MaxSelect: 1, Values: []string{"queued", "processing", "completed", "completed_with_errors", "failed"}},
+			&core.TextField{Name: "error_code"},
+			&core.TextField{Name: "error_message"},
+			&core.DateField{Name: "finished_at"},
+		),
+	}
+	if err := app.Save(conversionJobs); err != nil {
+		t.Fatalf("create conversion_jobs: %v", err)
+	}
+	return conversionJobs
+}
+
+// markFatal 的分派表必须认识每一个 kind：conversion 的记录在 conversion_jobs，既不是
+// markFatal 默认的 import_jobs，也不是 pdf 的 project_files。
+//
+// 这一格是评审那段的复现。漏掉这条分支时，runWorker 的 panic 兜底（不分 kind 一律调
+// markFatal）会把记录查空、只留一条 fatal_record_lookup_failed 日志，作业永远停在
+// processing；而 idx_conversion_jobs_active 是 `WHERE status IN ('queued','processing')`
+// 的部分唯一索引，于是该项目此后每次发起转换都撞 409，管理员只能靠重启进程恢复。
+func TestMarkFatalRoutesConversionJobsToTheirOwnCollection(t *testing.T) {
+	app := newSchemaTestApp(t)
+	conversionJobs := addConversionJobsCollection(t, app)
+
+	job := core.NewRecord(conversionJobs)
+	job.Set("status", "processing")
+	if err := app.Save(job); err != nil {
+		t.Fatal(err)
+	}
+
+	service := newImportService(app)
+	service.markFatal(
+		importWork{kind: "conversion", id: job.Id, requestID: "test-panic"},
+		"WORKER_PANIC", "服务器处理文件时发生内部错误。",
+		fmt.Errorf("boom"),
+	)
+
+	updated, err := app.FindRecordById("conversion_jobs", job.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.GetString("status"); got != "failed" {
+		t.Fatalf("conversion job status = %q, want failed：panic 不能把作业留在 processing，"+
+			"否则 idx_conversion_jobs_active 会让这个项目再也发不出新的转换作业", got)
+	}
+	if got := updated.GetString("error_code"); got != "WORKER_PANIC" {
+		t.Fatalf("error_code = %q, want WORKER_PANIC", got)
+	}
+	if updated.GetDateTime("finished_at").IsZero() {
+		t.Fatal("finished_at 没被写上：作业在恢复扫描与活跃唯一索引眼里仍是进行中")
+	}
+}
+
+// TestEveryWorkKindHasAFinalizeTarget 遍历 workRoutes——runWorker 的分派与 markFatal 的
+// 兜底共用的那张表——断言每一格都指向一个真实存在的收尾集合，且有处理函数。
+//
+// 上面那一格证明「表里有 conversion，且它能落库」；这一格证明的是**表本身**没有指向不存在的
+// 集合。两者分工明确：前者是行为（真的写进去了），这一格是结构（集合名不是拼错的）。
+// 「新增 kind 忘了给它归属」这一类比拼错更严重——runWorker 与 markFatal 都只从这张表读，
+// 没有第二处 switch 可以漏，但**表里少一格**这件事这个方向看不见，所以由下面那一格从
+// enqueue 侧反向断言。
+func TestEveryWorkKindHasAFinalizeTarget(t *testing.T) {
+	app := newSchemaTestApp(t)
+	conversionJobs := addConversionJobsCollection(t, app)
+
+	for kind, route := range workRoutes {
+		t.Run(kind, func(t *testing.T) {
+			if route.process == nil {
+				t.Fatalf("%s 在表里没有处理函数：入队后不会有人处理它", kind)
+			}
+			collection := route.collection
+			if collection == "" {
+				// 空 collection 是 conversion 的约定：它的记录在 conversion_jobs。
+				collection = conversionJobs.Name
+			}
+			if _, err := app.FindCollectionByNameOrId(collection); err != nil {
+				t.Fatalf("%s 的收尾集合 %q 不存在：panic 兜底会查空记录、只留一条日志，"+
+					"作业永远停在 processing", kind, collection)
+			}
+		})
+	}
+}
+
+// TestEveryEnqueueableWorkKindIsInTheTable 是上一格的**反方向**。上一格遍历表里的每一格，
+// 所以「某个 kind 根本没进表」它看不见：表里少一格，那个方向一个子测试都不会跑。
+//
+// 运行时表现：入队照常成功（enqueue 不看表），worker 取到它时打一条 worker_unknown_kind
+// 日志后 return，作业永远停在 queued，而且没有任何重试。
+//
+// 这份清单是手抄的，边界要说清：将来新增第 7 个入队调用点时，这里不会自己变长，这一格也
+// 不会红——接住那种漂的是各 kind 自己的集成套件（作业要真走队列走到终态）。它挡住的是
+// 「表被人整格删掉 / 某个 kind 被从表里挪走」这一类单测层完全不可见的漂。
+func TestEveryEnqueueableWorkKindIsInTheTable(t *testing.T) {
+	// 六个来源：import_service.go 的 workKind（csv / csv_inspect）、三处字面量
+	// （csv / pdf / conversion），以及 recoverPendingWork 按 mode 分流的 ocr 与 bundle。
+	enqueueable := []string{"csv_inspect", "csv", "pdf", "ocr", "bundle", "conversion"}
+	for _, kind := range enqueueable {
+		if _, known := workRoutes[kind]; !known {
+			t.Fatalf("入队侧会产生 %q 这种作业，但 workRoutes 里没有它："+
+				"worker 只会打一条 worker_unknown_kind 日志就 return，作业永远停在 queued", kind)
+		}
 	}
 }

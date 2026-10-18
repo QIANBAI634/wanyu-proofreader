@@ -14,6 +14,7 @@
         <a href="#project-export">导出结果</a>
         <a href="#project-entries">条目管理</a>
         <a v-if="project?.capabilities?.canManage" href="#project-assist">机器疑点</a>
+        <a v-if="project?.capabilities?.canManage" href="#project-scheme">拼音归一</a>
       </nav>
     </header>
 
@@ -600,6 +601,142 @@
         </ul>
         <p v-else class="text-muted assist-empty">还没有把任何分组标为「不是冲突」。</p>
       </section>
+
+      <!-- #190 拼音归一：机器判不出来的进复核队列，人工结论写在条目上 -->
+      <section v-if="project?.capabilities?.canManage" id="project-scheme" class="card project-section mb-6">
+        <div class="section-heading">
+          <div>
+            <h2>拼音归一</h2>
+            <p class="text-sm text-muted">
+              按<strong>声明的</strong>方案把校对后的记音转换成统一方案；系统不会替你判断某批资料用的是哪一套。
+              机器判不出来的条目会进入下面的复核队列。
+            </p>
+          </div>
+        </div>
+
+        <p v-if="schemeNotice" class="alert alert-warning" role="alert">{{ schemeNotice }}</p>
+
+        <template v-else>
+          <div class="admin-list-filters mb-4">
+            <label class="admin-filter-field">
+              <span>本批资料用的是哪套方案</span>
+              <select v-model="schemeSourceId" class="form-control">
+                <option value="">请选择</option>
+                <option v-for="item in schemeOptions" :key="item.source_scheme_id" :value="item.source_scheme_id">
+                  {{ schemeOptionLabel(item) }}
+                </option>
+              </select>
+            </label>
+            <button type="button" class="btn btn-primary" :disabled="schemeBusy || !schemeSourceId" @click="runConversion">
+              {{ schemeBusy ? '转换中…' : '生成统一拼音' }}
+            </button>
+            <button type="button" class="btn btn-secondary" :disabled="schemeBusy" @click="loadSchemeState">刷新</button>
+          </div>
+          <!-- 规则文件自己声明了能不能跑真实作业。合成夹具在目录里是合法的一等公民
+               （引擎需要它），但它建不出真实作业——这句话必须在按钮旁边说。 -->
+          <p v-if="testOnlySchemes.length" class="text-sm text-muted">
+            {{ testOnlySchemes.join('、') }} 声明为「仅测试」（rule_status=test）：可以选中，但服务端会拒绝用它创建真实转换作业。
+            真实方案随 #189 交付，届时那份规则写 rule_status=production 并给出出处。
+          </p>
+          <p v-if="schemeError" class="alert alert-error" role="alert">{{ schemeError }}</p>
+          <p v-if="schemeSuccess" class="alert alert-success" role="status">{{ schemeSuccess }}</p>
+
+          <h3>最近一次转换</h3>
+          <p v-if="!schemeJob" class="text-muted">还没有跑过转换。</p>
+          <template v-else>
+            <p class="text-sm text-muted">
+              状态：{{ conversionJobStatusLabel(schemeJob.status) }} · 规则版本 {{ schemeJob.rule_version }} ·
+              方案 {{ schemeJob.source_scheme }} → {{ schemeJob.canonical_scheme }}
+            </p>
+            <div class="flex gap-2 items-center mb-2">
+              <span v-for="line in schemeSummary" :key="line.key" class="badge">{{ line.label }} · {{ line.count }}</span>
+            </div>
+            <p v-if="schemeJob.error_message" class="alert alert-error" role="alert">{{ schemeJob.error_message }}</p>
+          </template>
+
+          <h3>复核队列（机器判不出来）</h3>
+          <p class="text-muted">
+            这些条目机器判不出来——要么规则给出多个候选（需人工确认），要么规则根本接不住（暂未支持）——
+            需要人给出统一方案的写法。结论会记下判定人与依据，重跑时保留，不会被下一次批处理推回机器判断。
+          </p>
+          <div class="flex gap-2 items-center mb-2" role="group" aria-label="复核队列状态筛选">
+            <button
+              type="button"
+              class="btn btn-sm"
+              :class="reviewStatusFilter === 'all' ? 'btn-primary' : 'btn-secondary'"
+              @click="setReviewFilter('all')"
+            >全部待复核</button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :class="reviewStatusFilter === 'AMBIGUOUS' ? 'btn-primary' : 'btn-secondary'"
+              @click="setReviewFilter('AMBIGUOUS')"
+            >需人工确认</button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :class="reviewStatusFilter === 'UNSUPPORTED' ? 'btn-primary' : 'btn-secondary'"
+              @click="setReviewFilter('UNSUPPORTED')"
+            >暂未支持</button>
+          </div>
+          <p v-if="!reviewRows.length" class="text-muted">{{ reviewEmptyMessage }}</p>
+          <template v-else>
+            <p class="text-sm text-muted">共 {{ reviewTotalItems }} 条待复核。</p>
+            <ul class="assist-list">
+              <li v-for="row in reviewRows" :key="row.id" class="assist-row">
+                <div>
+                  <strong>第 {{ row.page_number }} 条</strong>
+                  <span :class="normalizationBadgeClass(row.normalization_status)">
+                    {{ normalizationStatusLabel(row.normalization_status) }}
+                  </span>
+                  <p class="text-sm">原值（转换时）：<code>{{ row.source_pronunciation || '（空）' }}</code></p>
+                  <p v-if="row.normalization_trace.length" class="text-sm text-muted">
+                    经过规则：{{ row.normalization_trace.join(' → ') }}
+                  </p>
+                  <p v-if="row.candidates.length" class="text-sm text-muted">候选：{{ row.candidates.join(' / ') }}</p>
+                  <label class="admin-filter-field">
+                    <span>统一方案的写法</span>
+                    <input v-model="reviewDraft[row.id].canonical" class="form-control" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span>依据（必填）</span>
+                    <input v-model="reviewDraft[row.id].basis" class="form-control" maxlength="500" />
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="reviewBusy || !reviewDraft[row.id].canonical.trim() || !reviewDraft[row.id].basis.trim()"
+                    @click="saveReview(row)"
+                  >确认结论</button>
+                </div>
+              </li>
+            </ul>
+          <!-- 队列也要能翻页：一次转换动辄留下几十上百条待复核，只给前 10 条会让
+               管理员以为「队列就这么长」，而剩下的那些没有任何入口能看到。 -->
+          <nav v-if="reviewTotalPages > 1" class="admin-pagination" aria-label="复核队列分页">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="reviewPage <= 1"
+              @click="gotoReviewPage(reviewPage - 1)"
+            >
+              上一页
+            </button>
+            <span class="text-sm text-muted">
+              第 {{ reviewPage }} / {{ reviewTotalPages }} 页
+            </span>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="reviewPage >= reviewTotalPages"
+              @click="gotoReviewPage(reviewPage + 1)"
+            >
+              下一页
+            </button>
+          </nav>
+          </template>
+        </template>
+      </section>
     </template>
 
     <AppModal
@@ -705,6 +842,22 @@ import {
 } from '@/lib/qualityState'
 import AppModal from '@/components/AppModal.vue'
 import PageContentEditModal from '@/components/admin/PageContentEditModal.vue'
+import {
+  decideNormalization,
+  listConversions,
+  listNormalizations,
+  listSchemeAdapters,
+  startConversion
+} from '@/services/schemeConversionService'
+import {
+  adapterNotice,
+  conversionJobStatusLabel,
+  conversionSummaryLines,
+  normalizationBadgeClass,
+  normalizationStatusLabel,
+  schemeOptionLabel,
+  testOnlySchemeIds
+} from '@/lib/schemeConversion'
 import { getPbMessage, getPbStatus, getUploadErrorMessage, isRetryablePdfUploadError } from '@/utils/pbErrors'
 
 const route = useRoute()
@@ -777,6 +930,149 @@ const qualitySubmitting = ref(false)
 const qualityDialogError = ref('')
 let pdfPollGeneration = 0
 let csvPollGeneration = 0
+
+// ---------- #190 拼音归一 ----------
+const schemeOptions = ref([])
+const schemeNotice = ref('')
+const schemeSourceId = ref('')
+const schemeJob = ref(null)
+const schemeBusy = ref(false)
+const schemeError = ref('')
+const schemeSuccess = ref('')
+const reviewRows = ref([])
+const reviewDraft = ref({})
+const reviewBusy = ref(false)
+// 队列分页。perPage 与服务端默认（25）不同是有意的：一屏 10 条够看清候选与依据，
+// 而队列的长度现在靠下面那句「共 N 条待复核」说，不靠把整页撑长。
+const reviewPage = ref(1)
+const reviewTotalItems = ref(0)
+const reviewTotalPages = ref(1)
+// 机器判不出来的有两种：AMBIGUOUS（规则给出多个候选）与 UNSUPPORTED（规则根本接不住）。
+// 默认一起列，因为汇总里的「暂未支持」如果没有入口，管理员就知道有问题却没法处理。
+// 筛选项保留给「只处理某一类」的场景。
+const reviewStatusFilter = ref('all') // all | AMBIGUOUS | UNSUPPORTED
+const reviewEmptyMessage = computed(() => {
+  if (reviewStatusFilter.value === 'UNSUPPORTED') return '当前没有「暂未支持」的条目。'
+  if (reviewStatusFilter.value === 'AMBIGUOUS') return '当前没有「需人工确认」的条目。'
+  return '当前没有待复核的条目。'
+})
+// 轮询代际：离开页面或再次发起时旧的那条循环必须自己停，否则它会一直打接口。
+let schemePollGeneration = 0
+
+const schemeSummary = computed(() => conversionSummaryLines(schemeJob.value))
+// 目录里声明为「仅测试」的方案。列表逐条从服务端读，不在这里猜哪一份是夹具：
+// 判断权在规则文件自己手里（rule_status），界面只负责把它画出来。
+const testOnlySchemes = computed(() => testOnlySchemeIds(schemeOptions.value))
+
+async function loadReviews() {
+  const status = reviewStatusFilter.value === 'all'
+    ? 'AMBIGUOUS,UNSUPPORTED'
+    : reviewStatusFilter.value
+  const queue = await listNormalizations(projectId, { status, perPage: 10, page: reviewPage.value })
+  reviewRows.value = queue.items || []
+  reviewTotalItems.value = queue.totalItems || 0
+  reviewTotalPages.value = queue.totalPages || 1
+  // 服务端会把越界的 page 夹回最后一页，这里跟回去：不复写的话，界面上写的是
+  // 「第 3 / 2 页」而列表是第 2 页的内容——复核一条少一条时很容易走到这里。
+  reviewPage.value = queue.page || 1
+  // 草稿按条目 id 存：刷新后原来的输入不该串到别的条目上。
+  reviewDraft.value = Object.fromEntries(reviewRows.value.map((row) => [row.id, { canonical: '', basis: '' }]))
+}
+
+async function setReviewFilter(value) {
+  if (reviewStatusFilter.value === value) return
+  reviewStatusFilter.value = value
+  // 换了筛选条件就是换了一份清单，页码必须从头开始。
+  reviewPage.value = 1
+  try {
+    await loadReviews()
+  } catch (e) {
+    schemeError.value = getPbMessage(e, '复核队列加载失败。')
+  }
+}
+
+async function gotoReviewPage(page) {
+  if (page < 1 || page > reviewTotalPages.value) return
+  reviewPage.value = page
+  try {
+    await loadReviews()
+  } catch (e) {
+    schemeError.value = getPbMessage(e, '复核队列加载失败。')
+  }
+}
+
+async function loadSchemeState() {
+  try {
+    const adapters = await listSchemeAdapters()
+    schemeOptions.value = adapters.schemes || []
+    schemeNotice.value = adapterNotice(adapters)
+    schemeError.value = ''
+    if (schemeNotice.value) return
+    const conversions = await listConversions(projectId)
+    schemeJob.value = (conversions.items || [])[0] || null
+    await loadReviews()
+  } catch (e) {
+    schemeError.value = getPbMessage(e, '拼音归一状态加载失败。')
+  }
+}
+
+async function runConversion() {
+  schemeBusy.value = true
+  schemeError.value = ''
+  schemeSuccess.value = ''
+  try {
+    const job = await startConversion(projectId, schemeSourceId.value)
+    schemeJob.value = job
+    // 新作业会把队列重造一遍，退回第一页：留在第三页看一份已经被换掉的清单，
+    // 翻页控件上的「第 3 / 5 页」就成了一句没人能核对的话。
+    reviewPage.value = 1
+    schemeSuccess.value = '转换作业已排队，完成后这里会显示汇总。'
+    pollConversion()
+  } catch (e) {
+    schemeError.value = getPbMessage(e, '发起转换失败，请稍后重试。')
+  } finally {
+    schemeBusy.value = false
+  }
+}
+
+// 服务端没有推送，作业状态只能轮询。这里刻意不设总时长上限：跑一万条本来就慢，
+// 中途放弃会让管理员以为作业停了；真正的停止条件是「代际变了」（离开页面或又发起了一次）。
+function pollConversion() {
+  const generation = ++schemePollGeneration
+  const tick = async () => {
+    if (generation !== schemePollGeneration) return
+    try {
+      const conversions = await listConversions(projectId)
+      const latest = (conversions.items || [])[0]
+      if (latest) schemeJob.value = latest
+      if (latest && ['queued', 'processing'].includes(latest.status)) {
+        setTimeout(tick, 1500)
+        return
+      }
+      await loadReviews()
+    } catch {
+      // 轮询失败不打扰用户：手动刷新能补上，报错反而会盖住上一次的成功提示。
+    }
+  }
+  setTimeout(tick, 1500)
+}
+
+async function saveReview(row) {
+  const draft = reviewDraft.value[row.id]
+  if (!draft) return
+  reviewBusy.value = true
+  schemeError.value = ''
+  schemeSuccess.value = ''
+  try {
+    await decideNormalization(row.id, { canonical: draft.canonical.trim(), basis: draft.basis.trim() })
+    schemeSuccess.value = `第 ${row.page_number} 条已记为「已复核」，重跑时不会被推回机器判断。`
+    await loadReviews()
+  } catch (e) {
+    schemeError.value = getPbMessage(e, '保存人工结论失败。')
+  } finally {
+    reviewBusy.value = false
+  }
+}
 
 const statusOptions = Object.entries(PAGE_STATUS_LABELS).map(([value, label]) => ({ value, label }))
 const qualityStateOptions = QUALITY_STATES.map((value) => ({ value, label: QUALITY_STATE_LABELS[value] }))
@@ -858,7 +1154,7 @@ onMounted(async () => {
     return
   }
   loadingProject.value = false
-  await Promise.all([loadPages(), loadQualitySummary(), loadPdfResume()])
+  await Promise.all([loadPages(), loadQualitySummary(), loadPdfResume(), loadSchemeState()])
   if (selectedStatus.value) {
     await nextTick()
     scrollToEntries()
@@ -870,6 +1166,7 @@ onBeforeUnmount(() => {
   pdfPollGeneration += 1
   csvPollGeneration += 1
   pageLoadGeneration += 1
+  schemePollGeneration += 1
   clearTimeout(searchTimer)
 })
 

@@ -1,8 +1,11 @@
 package scheme
 
 import (
-	"golang.org/x/text/unicode/norm"
+	"errors"
+	"fmt"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Result is one conversion in the #114 §5 shape. CanonicalPronunciation is only
@@ -175,6 +178,38 @@ func (a *Adapter) parse(value string) ([]syllable, bool) {
 // only place that can tell a hand-transcribed value from a typo.
 func (a *Adapter) parseCanonical(value string) ([]syllable, bool) {
 	return splitSyllables(value, a.canonicalOnsets, a.canonicalRimes, a.canonicalTones)
+}
+
+// NormalizeCanonical is the exported form of the check LoadAdapter runs on a
+// hand-written exception, and it exists for the same reason: the value did not
+// come out of the pipeline, a person typed it, and nothing else stands between a
+// typo and a permanent human conclusion (#190's decideNormalization). It returns
+// the NFC form to store alongside the verdict, because the pipeline normalises
+// before it parses and a stored value has to be the one that was checked.
+//
+// A successful parseCanonical *is* the legality check, and that is not a
+// shortcut: splitSyllables only ever matches onsets, rimes and tones drawn from
+// the canonical inventories, and insists on exactly one tone per syllable, so a
+// value it accepts is by construction a sequence of syllables the target scheme
+// can spell. legal() is deliberately not called on top of it: every piece it
+// re-tests was just taken from the very sets it tests, so it could not fail here.
+//
+// The error is Chinese and names what the scheme does offer, because the person
+// reading it is a reviewer about to retype the value: "invalid" alone would tell
+// them nothing, and the tone list is the part small enough to print in full.
+func (a *Adapter) NormalizeCanonical(value string) (string, error) {
+	cleaned := norm.NFC.String(strings.TrimSpace(value))
+	if cleaned == "" {
+		return "", errors.New("统一方案的写法不能为空。")
+	}
+	if _, ok := a.parseCanonical(cleaned); !ok {
+		return "", fmt.Errorf(
+			"「%s」不是「%s」能拼出的音节。它必须由该方案清单里的声母、韵母与调值拼成："+
+				"声母 %d 个、韵母 %d 个，可用调值 %s。",
+			cleaned, a.CanonicalScheme,
+			len(a.Canonical.Onsets), len(a.Canonical.Rimes), strings.Join(a.Canonical.ToneValues, "、"))
+	}
+	return cleaned, nil
 }
 
 func splitSyllables(value string, onsets, rimes, tones []string) ([]syllable, bool) {

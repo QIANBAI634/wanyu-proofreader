@@ -60,6 +60,8 @@ verify-static:
 	@python3 scripts/check_line_endings.py
 	@echo 'UI debt ratchet (per-kind warn/fail policy)'
 	@python3 scripts/check_ui_debt.py
+	@echo 'docker build context (every Go package directory is copied)'
+	@python3 scripts/check_docker_build_context.py
 
 lint:
 	@echo 'eslint (correctness rules only; no style sweep yet)'

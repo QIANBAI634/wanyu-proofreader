@@ -8,8 +8,12 @@ ENV GOFLAGS="-p=1"
 RUN go mod download
 # Keep the build context future-proof as backend services are split into
 # focused files; tests still run inside the image build before compilation.
+# 每一个被 package main 依赖的子目录都必须在这里，否则 `go test ./...` 会在镜像里
+# 报「package fangji/backend/<dir> is not in std」——本机与 CI 的 Go 构建都看不到这个缺口，
+# 只有容器构建会。scripts/check_docker_build_context.py 钉住这份清单。
 COPY *.go ./
 COPY reviewbundle/ ./reviewbundle/
+COPY scheme/ ./scheme/
 COPY pb_migrations/ ./pb_migrations/
 COPY keyboards/ ./keyboards/
 RUN go test ./...
