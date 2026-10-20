@@ -22,8 +22,10 @@ func (s *importService) registerImportLedger() {
 // projectImportLedger 列出本项目的导入批次（import_jobs），并按来源聚合出
 // 行数 / 来源覆盖 / 未知来源计数三个数，供管理端对账。
 //
-// 「来源」经 import_jobs.source 指到 #169 的 sources 登记（条目本身还没有来源键），
-// 所以「来源覆盖」按批次统计，而不是按条目。无来源的批次如实归入空来源，不猜测。
+// 入册量（imported_rows / 来源覆盖 / 未知来源）一律从 pages 表取「实际创建的条目」，
+// 而不是 import_jobs.success_count：bundle 复用自然键时会把 skipped 条目也计为
+// success（bundle_import.go 的「成功处理」旧契约），但并未创建新页面，直接累加会
+// 重复计入库量。输入行数（total_rows）保留 import_jobs.total_count 的「输入」语义。
 func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 	projectID := c.Request.PathValue("projectId")
 	if _, _, err := s.requireProjectManager(c, projectID); err != nil {
@@ -32,7 +34,8 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 
 	params := dbx.Params{"project": projectID}
 
-	// 批次列表：LEFT JOIN sources 拿到来源的 logical_id / title，前端无需再拼一次。
+	// 批次列表：LEFT JOIN sources 拿到来源的 logical_id / title，并附每批实际入库条数
+	// （pages 计数）。source_link 为空的历史批次归一为 unknown，前端按 unknown 显示。
 	type batchRow struct {
 		ID               string `db:"id"`
 		Created          string `db:"created"`
@@ -43,6 +46,7 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		TotalCount       int    `db:"total_count"`
 		SuccessCount     int    `db:"success_count"`
 		FailedCount      int    `db:"failed_count"`
+		InsertedCount    int    `db:"inserted_count"`
 		SourceLink       string `db:"source_link"`
 		SourceLogicalID  string `db:"source_logical_id"`
 		SourceTitle      string `db:"source_title"`
@@ -55,7 +59,8 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		        COALESCE(j.total_count, 0) AS total_count,
 		        COALESCE(j.success_count, 0) AS success_count,
 		        COALESCE(j.failed_count, 0) AS failed_count,
-		        COALESCE(j.source_link, '') AS source_link,
+		        (SELECT COUNT(*) FROM pages pp WHERE pp.import_job = j.id) AS inserted_count,
+		        CASE WHEN COALESCE(j.source_link, '') = '' THEN 'unknown' ELSE j.source_link END AS source_link,
 		        COALESCE(src.logical_id, '') AS source_logical_id,
 		        COALESCE(src.title, '') AS source_title
 		 FROM import_jobs j
@@ -66,8 +71,7 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		return apis.NewBadRequestError("读取导入台账失败。", err)
 	}
 
-	// 来源覆盖：按来源聚合「已提交终态的成功行」，无来源归入空来源（key 为空串）。
-	// 与 imported_rows 同一口径——预检通过但未 commit 的作业不产生条目，不能计入覆盖。
+	// 来源覆盖：按来源聚合「实际创建的条目」（pages 计数），无来源归入空来源。
 	type sourceAgg struct {
 		LogicalID string `db:"logical_id"`
 		Title     string `db:"title"`
@@ -77,34 +81,41 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 	if err := s.app.DB().NewQuery(
 		`SELECT COALESCE(src.logical_id, '') AS logical_id,
 		        COALESCE(src.title, '') AS title,
-		        COALESCE(SUM(j.success_count), 0) AS rows
-		 FROM import_jobs j
+		        COUNT(*) AS rows
+		 FROM pages p
+		 JOIN import_jobs j ON j.id = p.import_job
 		 LEFT JOIN sources src ON src.id = j.source
-		 WHERE j.project = {:project}
-		   AND j.status IN ('completed', 'completed_with_errors')
+		 WHERE p.project = {:project}
 		 GROUP BY 1, 2
 		 ORDER BY 3 DESC, 1`,
 	).Bind(params).All(&sourceAggs); err != nil {
 		return apis.NewBadRequestError("读取来源覆盖失败。", err)
 	}
 
-	// 三个数从批次列表就地汇总：批次数量级小，不需要再开一条聚合查询。
-	// 入册口径统一取「已提交终态的成功行」：预检通过但未 commit 的作业，其
-	// success_count 是预检时写的 ValidRows（尚未创建条目），不能算入册；
-	// total_count 又含被跳过的输入行，也不能当入册。
+	// 入册行数 = 实际创建的条目数（pages 总数）。
+	var importedRows int
+	if err := s.app.DB().NewQuery(
+		`SELECT COUNT(*) FROM pages WHERE project = {:project}`,
+	).Bind(params).Row(&importedRows); err != nil {
+		return apis.NewBadRequestError("读取入册行数失败。", err)
+	}
+
+	// 未知来源行数 = 来自未知来源作业的实际条目数。
+	var unknownSourceRows int
+	if err := s.app.DB().NewQuery(
+		`SELECT COUNT(*) FROM pages p
+		 JOIN import_jobs j ON j.id = p.import_job
+		 WHERE p.project = {:project}
+		   AND (j.source_link IS NULL OR j.source_link = '' OR j.source_link = 'unknown')`,
+	).Bind(params).Row(&unknownSourceRows); err != nil {
+		return apis.NewBadRequestError("读取未知来源行数失败。", err)
+	}
+
+	// 输入行数从批次列表就地汇总：所有批次 total_count 之和（含跳过的输入行）。
 	totalBatches := len(batches)
-	totalRows := 0    // 输入行数（所有批次 total_count 之和，含跳过）
-	importedRows := 0 // 入册行数（已提交终态批次 success_count 之和）
-	unknownSourceRows := 0
+	totalRows := 0
 	for _, b := range batches {
 		totalRows += b.TotalCount
-		if b.Status != "completed" && b.Status != "completed_with_errors" {
-			continue
-		}
-		importedRows += b.SuccessCount
-		if b.SourceLink == "" || b.SourceLink == "unknown" {
-			unknownSourceRows += b.SuccessCount
-		}
 	}
 
 	sources := make([]map[string]any, 0, len(sourceAggs))
@@ -128,6 +139,7 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 			"total_count":       b.TotalCount,
 			"success_count":     b.SuccessCount,
 			"failed_count":      b.FailedCount,
+			"inserted_count":    b.InsertedCount,
 			"source_link":       b.SourceLink,
 			"source_logical_id": b.SourceLogicalID,
 			"source_title":      b.SourceTitle,

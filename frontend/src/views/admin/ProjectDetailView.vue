@@ -263,7 +263,7 @@
                   <td>{{ batch.original_filename || '—' }}</td>
                   <td>{{ batch.status }}</td>
                   <td>{{ batch.total_count }}</td>
-                  <td>{{ batch.success_count }}</td>
+                  <td>{{ batch.inserted_count }}</td>
                   <td>{{ batch.failed_count }}</td>
                   <td>{{ batch.source_logical_id || (batch.source_link === 'unknown' ? '未登记来源' : '—') }}</td>
                 </tr>
@@ -1574,6 +1574,7 @@ async function confirmCsvImport() {
     if (generation !== csvPollGeneration) return
     if (job.status === 'failed') {
       csvError.value = csvFatalMessage(job)
+      await loadLedger()
       return
     }
     csvSuccess.value = job.failed_count > 0
