@@ -42,6 +42,11 @@ SPECS = {
             'source_empty': {'required': False},
         }),
     },
+    '1792713600_import_job_skipped_count.js': {
+        'fields': ('import_jobs', {
+            'skipped_count': {'required': False},
+        }),
+    },
     '1791580800_unique_nickname_login.js': {
         'indexes': ['idx_users_nickname'],
         'collection_indexes': ('users', 'idx_users_nickname'),

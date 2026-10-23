@@ -157,8 +157,10 @@ const entries = [
 ]
 const bundleA = await uploadBundle(bundleZip({ bundleId: 'rb-a', entries, rightsRef: bundleSource.logical_id }), 'a.zip')
 assert.equal(bundleA.success_count, 2)
+assert.equal(bundleA.skipped_count, 0)
 const bundleB = await uploadBundle(bundleZip({ bundleId: 'rb-b', entries, rightsRef: bundleSource.logical_id }), 'b.zip')
-assert.equal(bundleB.success_count, 2) // 复用自然键仍计为「成功处理」，但不建新条目
+assert.equal(bundleB.success_count, 2)  // 复用自然键仍计为「成功处理」，但不建新条目
+assert.equal(bundleB.skipped_count, 2)  // 2 条复用自然键落成「跳过」字段，不再靠 error_message 推断
 
 const bundleLedger = await api(`/api/fangji/projects/${bundleProject.id}/import-ledger`, { token })
 assert.equal(bundleLedger.summary.total_batches, 2)
@@ -169,5 +171,33 @@ const bundleBySource = Object.fromEntries(bundleLedger.summary.sources.map((s) =
 assert.equal(bundleBySource[bundleSource.logical_id], 2)
 const bundleInserted = bundleLedger.batches.map((b) => b.inserted_count).sort()
 assert.deepEqual(bundleInserted, [0, 2])              // 第二批 inserted_count = 0
+const bundleBySkip = Object.fromEntries(bundleLedger.batches.map((b) => [b.id, b.skipped_count]))
+assert.equal(bundleBySkip[bundleB.id], 2)             // 台账逐批暴露跳过数
 
-console.log('PASS: import ledger counts actual pages (not success_count) for CSV and bundle reuse')
+// ===================== 场景三：无作业关联的合法条目 + importing 暂存页 =====================
+
+const ledgerProject = await api('/api/fangji/projects', { method: 'POST', token, body: { name: '台账页计数夹具' }, status: 201 })
+// 1. 没有 import_job 的合法 pending 条目（集合 API 直建，同 core_logic 套件）。
+const orphanPage = await api('/api/collections/pages/records', {
+  method: 'POST', token, body: {
+    project: ledgerProject.id, page_number: 1, pdf_page: 1,
+    ocr_row_json: JSON.stringify({ 词条: '孤儿', 释义: '无作业' }), ocr_text: '孤儿 无作业',
+    proofread_round: 1, mismatch_count: 0, status: 'pending'
+  }
+})
+// 2. 一条 status=importing 的暂存页（尚未交付，不应计入任何台账页计数）。
+await api('/api/collections/pages/records', {
+  method: 'POST', token, body: {
+    project: ledgerProject.id, page_number: 2, pdf_page: 2,
+    ocr_row_json: JSON.stringify({ 词条: '暂存', 释义: '导入中' }), ocr_text: '暂存 导入中',
+    proofread_round: 1, mismatch_count: 0, status: 'importing'
+  }
+})
+
+const ledgerOnly = await api(`/api/fangji/projects/${ledgerProject.id}/import-ledger`, { token })
+assert.equal(ledgerOnly.summary.imported_rows, 1)      // 只算已交付的 pending 条目，不含 importing
+assert.equal(ledgerOnly.summary.unknown_source_rows, 1) // 无 import_job 的条目经 LEFT JOIN 归入未知
+const orphanSources = Object.fromEntries(ledgerOnly.summary.sources.map((s) => [s.logical_id, s.rows]))
+assert.equal(orphanSources[''], 1)                      // 空来源桶收纳无作业关联的条目
+
+console.log('PASS: import ledger counts actual pages (not success_count), excludes importing, keeps orphan entries as unknown, and exposes bundle skip')

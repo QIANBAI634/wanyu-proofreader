@@ -494,6 +494,7 @@ func (s *importService) processBundle(work importWork) {
 	job.Set("processed_count", counters.processed)
 	job.Set("success_count", counters.success)
 	job.Set("failed_count", counters.failed)
+	job.Set("skipped_count", counters.skipped)
 	// notes 只在真有事发生时才有内容：无条件写一句「已跳过 0 条重复条目」会让一次
 	// 全新的成功导入也挂上一条读起来像错误的文案。
 	notes := []string{}
@@ -705,6 +706,7 @@ func (s *importService) updateBundleProgress(job *core.Record, counters *bundleC
 	job.Set("processed_count", counters.processed)
 	job.Set("success_count", counters.success)
 	job.Set("failed_count", counters.failed)
+	job.Set("skipped_count", counters.skipped)
 	if err := s.app.Save(job); err != nil {
 		logUpload("error", "bundle_progress_persist_failed", map[string]any{
 			"kind":            "bundle",

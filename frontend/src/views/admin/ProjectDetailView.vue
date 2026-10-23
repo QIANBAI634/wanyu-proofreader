@@ -252,7 +252,8 @@
                   <th>状态</th>
                   <th>输入</th>
                   <th>入库</th>
-                  <th>跳过/失败</th>
+                  <th>跳过</th>
+                  <th>失败</th>
                   <th>来源</th>
                 </tr>
               </thead>
@@ -264,11 +265,12 @@
                   <td>{{ batch.status }}</td>
                   <td>{{ batch.total_count }}</td>
                   <td>{{ batch.inserted_count }}</td>
+                  <td>{{ batch.skipped_count }}</td>
                   <td>{{ batch.failed_count }}</td>
                   <td>{{ batch.source_logical_id || (batch.source_link === 'unknown' ? '未登记来源' : '—') }}</td>
                 </tr>
                 <tr v-if="!ledger.batches.length">
-                  <td colspan="8" class="text-muted">还没有导入批次。</td>
+                  <td colspan="9" class="text-muted">还没有导入批次。</td>
                 </tr>
               </tbody>
             </table>
@@ -1778,7 +1780,7 @@ async function deleteSelectedRows() {
     await deletePendingPages(projectId, selectedPendingIds.value)
     selectedPendingIds.value = []
     // 同上：删除同样改变条目总数，汇总不跟着走就会与表格对不上账。
-    await Promise.all([loadPages(), loadQualitySummary()])
+    await Promise.all([loadPages(), loadQualitySummary(), loadLedger()])
     mutationSuccess.value = `已删除 ${deleteCount} 条待校对条目，并重新整理条号。`
   } catch (e) {
     mutationError.value = getPbMessage(e, '批量删除失败，请重试')
