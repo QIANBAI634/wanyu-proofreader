@@ -226,7 +226,7 @@
       <!-- Import ledger -->
       <section id="project-ledger" class="card project-section mb-6">
         <div class="card-title">批次台账</div>
-        <p class="text-sm text-muted mb-3">本项目的导入批次汇总：入册行数、来源覆盖与未知来源计数均由系统对账给出。</p>
+        <p class="text-sm text-muted mb-3">本项目的导入批次汇总：入册行数、来源覆盖与未知来源计数均由系统对账给出。「跳过」列为 Review Bundle 复用自然键的条数；CSV 预检被跳过的无效行计入「失败」列。</p>
         <div v-if="loadingLedger" class="text-muted">加载中...</div>
         <div v-else-if="ledgerError" class="alert alert-error" role="alert">{{ ledgerError }}</div>
         <template v-else-if="ledger">

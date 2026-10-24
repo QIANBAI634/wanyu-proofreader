@@ -106,14 +106,16 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		return apis.NewBadRequestError("读取入册行数失败。", err)
 	}
 
-	// 未知来源行数 = 来自未知来源（或缺少作业/来源关联）的实际条目数。
+	// 未知来源行数 = 无法解析到已登记来源（缺作业/来源关联，或来源登记已被删）的实际条目数。
+	// 与来源覆盖的「空来源桶」同一判定依据（都看 src 能不能 JOIN 到），避免两处口径漂移。
 	var unknownSourceRows int
 	if err := s.app.DB().NewQuery(
 		`SELECT COUNT(*) FROM pages p
 		 LEFT JOIN import_jobs j ON j.id = p.import_job
+		 LEFT JOIN sources src ON src.id = j.source
 		 WHERE p.project = {:project}
 		   AND p.status != 'importing'
-		   AND (j.source_link IS NULL OR j.source_link = '' OR j.source_link = 'unknown')`,
+		   AND (src.id IS NULL OR j.source_link IS NULL OR j.source_link = '' OR j.source_link = 'unknown')`,
 	).Bind(params).Row(&unknownSourceRows); err != nil {
 		return apis.NewBadRequestError("读取未知来源行数失败。", err)
 	}
