@@ -102,7 +102,7 @@
             </div>
           </dl>
 
-          <div v-if="tierRows(queue).length" class="queue-tiers" aria-label="按难度层级领取">
+          <div v-if="tierRows(queue).length || queue.blocked?.glyph_table" class="queue-tiers" aria-label="按难度层级领取">
             <button
               v-for="option in tierRows(queue)"
               :key="option.key"
@@ -110,6 +110,12 @@
               :disabled="claimingProject === queue.project.id"
               @click="enterProject(queue, option.key)"
             >{{ option.label }} · {{ option.count }}</button>
+            <button
+              v-if="queue.blocked?.glyph_table"
+              class="queue-tier queue-tier--glyph"
+              :disabled="claimingProject === queue.project.id"
+              @click="enterProject(queue, '', 'glyph_table')"
+            >缺字待登记 · {{ queue.blocked.glyph_table }}</button>
             <span v-if="tierUnknown(queue)" class="queue-tier queue-tier--muted">
               信号不足 {{ tierUnknown(queue) }}
             </span>
@@ -194,7 +200,7 @@ async function loadProjects({ keepActionError = false } = {}) {
   }
 }
 
-async function enterProject(queue, tier = '') {
+async function enterProject(queue, tier = '', blocked = '') {
   const projectId = queue?.project?.id
   if (!projectId || claimingProject.value || !queueAction(queue).canEnter) return
   claimingProject.value = projectId
@@ -202,11 +208,13 @@ async function enterProject(queue, tier = '') {
   try {
     const userId = currentUserId(auth.user)
     if (!userId) throw new Error('登录状态已失效，请重新登录')
-    const page = await claimNextProjectPage(projectId, userId, '', tier)
+    const page = await claimNextProjectPage(projectId, userId, '', tier, blocked)
     if (!page?.id) {
-      actionError.value = tier
-        ? `${tier} 类暂时没有可领取的条目，换个层级或按默认顺序领一条。`
-        : '该项目暂无你可处理的条目。'
+      actionError.value = blocked
+        ? '缺字待登记队列暂时没有可领取的条目。'
+        : tier
+          ? `${tier} 类暂时没有可领取的条目，换个层级或按默认顺序领一条。`
+          : '该项目暂无你可处理的条目。'
       await loadProjects({ keepActionError: true })
       return
     }

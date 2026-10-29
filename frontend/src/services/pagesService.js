@@ -152,13 +152,14 @@ export async function listProofreaderNeighborTasks(projectId, userId) {
   })
 }
 
-export async function claimNextProjectPage(projectId, userId, previousTaskId = '', tier = '') {
+export async function claimNextProjectPage(projectId, userId, previousTaskId = '', tier = '', blocked = '') {
   if (!projectId || !userId) throw new Error('缺少项目或校对员身份')
   return pb.send(`/api/fangji/projects/${encodeURIComponent(projectId)}/claim`, {
     method: 'POST',
     // tier 为空串 = 交给服务端按"默认优先 A、没有标签数据则退回原顺序"处理；
     // 传 A/B/C = 只在该层级里领。前端不自己排序，也不猜层级。
-    body: { previousTaskId, tier },
+    // blocked 为空串 = 不按阻塞原因筛；传 glyph_table = 只领「缺字待登记」队列。
+    body: { previousTaskId, tier, blocked },
     requestKey: null
   })
 }
