@@ -1700,6 +1700,10 @@ func (s *importService) flushCSVBatch(
 	return nextPageNumber
 }
 
+// 缺字占位符 @N（如 @98969）：CSV 里源库对未登记字形的登记序号，不是码位、也不是字形。
+// 口径与 assist_rules.js 的 PLACEHOLDER 一致（@ + 4~6 位十六进制数字）。
+var glyphPlaceholderRe = regexp.MustCompile(`@[0-9a-fA-F]{4,6}`)
+
 func savePage(dao core.App, jobID, projectID, projectFileID string, pageNumber int, row csvPage) error {
 	collection, err := dao.FindCollectionByNameOrId("pages")
 	if err != nil {
@@ -1717,6 +1721,10 @@ func savePage(dao core.App, jobID, projectID, projectFileID string, pageNumber i
 	record.Set("proofread_round", 1)
 	record.Set("mismatch_count", 0)
 	record.Set("status", "importing")
+	// 含缺字占位符的行自动标记为「缺字表待查」，供 A7.3 的缺字待登记队列单独领取。
+	if glyphPlaceholderRe.MatchString(row.entryText) {
+		record.Set("blocked_reason", "glyph_table")
+	}
 	return dao.Save(record)
 }
 
