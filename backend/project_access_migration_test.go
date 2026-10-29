@@ -18,9 +18,11 @@ import (
 var postSnapshotSelectFields = []struct {
 	Field     string
 	Migration string
+	Marker    string
 	Values    []string
 }{
-	{Field: "difficulty_tier", Migration: "pb_migrations/1789113700_page_difficulty.js", Values: []string{"A", "B", "C", "unknown"}},
+	{Field: "difficulty_tier", Migration: "pb_migrations/1789113700_page_difficulty.js", Marker: "const TIERS = [", Values: []string{"A", "B", "C", "unknown"}},
+	{Field: "blocked_reason", Migration: "pb_migrations/1789113700_page_difficulty.js", Marker: "const BLOCKED_BUCKETS = [", Values: []string{"glyph_table", "scanned_read", "column_merge", "rights_gate", "unknown"}},
 }
 
 func newSchemaTestApp(t testing.TB) *pocketbase.PocketBase {
@@ -64,20 +66,20 @@ func TestPostSnapshotFieldsTrackTheirMigrations(t *testing.T) {
 			t.Fatalf("%s: %v", column.Migration, err)
 		}
 		text := string(raw)
-		marker := "const TIERS = ["
+		marker := column.Marker
 		start := strings.Index(text, marker)
 		if start < 0 {
-			t.Fatalf("%s 里找不到 TIERS 定义，镜像字段 %s 的取值表已经无据可查", column.Migration, column.Field)
+			t.Fatalf("%s 里找不到 %s 定义，镜像字段 %s 的取值表已经无据可查", column.Migration, strings.TrimSpace(marker), column.Field)
 		}
 		list := text[start+len(marker):]
 		list = list[:strings.Index(list, "]")]
 		for _, want := range column.Values {
 			if !strings.Contains(list, `"`+want+`"`) {
-				t.Errorf("%s 的 TIERS 不含 %q（镜像与迁移已漂移）: %s", column.Migration, want, strings.TrimSpace(list))
+				t.Errorf("%s 的取值表不含 %q（镜像与迁移已漂移）: %s", column.Migration, want, strings.TrimSpace(list))
 			}
 		}
 		if got, want := strings.Count(list, `"`)/2, len(column.Values); got != want {
-			t.Errorf("%s 的 TIERS 有 %d 个值，镜像只列了 %d 个: %s", column.Migration, got, want, strings.TrimSpace(list))
+			t.Errorf("%s 的取值表有 %d 个值，镜像只列了 %d 个: %s", column.Migration, got, want, strings.TrimSpace(list))
 		}
 	}
 }
