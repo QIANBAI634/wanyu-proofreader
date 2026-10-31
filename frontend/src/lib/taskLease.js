@@ -31,3 +31,22 @@ export function leaseExpiresSoon(expiresAt, now = Date.now(), thresholdMs = 3 * 
   const expiry = new Date(expiresAt).getTime()
   return !Number.isFinite(expiry) || expiry - now <= thresholdMs
 }
+
+// 「缺字待登记」队列选择：从大厅点进缺字按钮后，续领要一直在缺字队列里，而不是
+// 处理一条就退回混合队列。用 sessionStorage 按用户 + 项目记住这个选择。
+const glyphQueueKeyPrefix = 'fangji:glyph-queue:v1'
+
+export function glyphQueueKey(userId, projectId) {
+  return `${glyphQueueKeyPrefix}:${encodeURIComponent(userId || '')}:${encodeURIComponent(projectId || '')}`
+}
+
+export function saveGlyphQueue(storage, { userId, projectId, glyph }) {
+  if (!storage || !userId || !projectId) return
+  if (glyph) storage.setItem(glyphQueueKey(userId, projectId), '1')
+  else storage.removeItem(glyphQueueKey(userId, projectId))
+}
+
+export function loadGlyphQueue(storage, { userId, projectId }) {
+  if (!storage || !userId || !projectId) return false
+  return storage.getItem(glyphQueueKey(userId, projectId)) === '1'
+}

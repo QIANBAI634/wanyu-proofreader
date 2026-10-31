@@ -1721,9 +1721,10 @@ func savePage(dao core.App, jobID, projectID, projectFileID string, pageNumber i
 	record.Set("proofread_round", 1)
 	record.Set("mismatch_count", 0)
 	record.Set("status", "importing")
-	// 含缺字占位符的行自动标记为「缺字表待查」，供 A7.3 的缺字待登记队列单独领取。
+	// 含缺字占位符的行置 missing_glyph=true（自动状态，供 A7.3 的缺字待登记队列单独领取）。
+	// 不写 blocked_reason：那是只有人工写入口的结论字段，自动写会污染难度推导与 D 工序。
 	if glyphPlaceholderRe.MatchString(row.entryText) {
-		record.Set("blocked_reason", "glyph_table")
+		record.Set("missing_glyph", true)
 	}
 	return dao.Save(record)
 }

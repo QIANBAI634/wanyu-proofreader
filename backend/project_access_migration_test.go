@@ -22,7 +22,6 @@ var postSnapshotSelectFields = []struct {
 	Values    []string
 }{
 	{Field: "difficulty_tier", Migration: "pb_migrations/1789113700_page_difficulty.js", Marker: "const TIERS = [", Values: []string{"A", "B", "C", "unknown"}},
-	{Field: "blocked_reason", Migration: "pb_migrations/1789113700_page_difficulty.js", Marker: "const BLOCKED_BUCKETS = [", Values: []string{"glyph_table", "scanned_read", "column_merge", "rights_gate", "unknown"}},
 }
 
 func newSchemaTestApp(t testing.TB) *pocketbase.PocketBase {
@@ -49,6 +48,10 @@ func newSchemaTestApp(t testing.TB) *pocketbase.PocketBase {
 			continue
 		}
 		pages.Fields.Add(&core.SelectField{Name: column.Field, MaxSelect: 1, Values: column.Values})
+	}
+	// 队列 SQL 还会读 pages.missing_glyph（布尔，1792800000 迁移追加），镜像里补一个布尔字段。
+	if pages.Fields.GetByName("missing_glyph") == nil {
+		pages.Fields.Add(&core.BoolField{Name: "missing_glyph"})
 	}
 	if err := app.Save(pages); err != nil {
 		t.Fatalf("add post-snapshot pages fields: %v", err)

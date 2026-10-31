@@ -290,7 +290,7 @@ import {
   setTaskFlash,
   takeTaskFlash
 } from '@/lib/taskDraft'
-import { clearTaskLease, loadTaskLease, saveTaskLease } from '@/lib/taskLease'
+import { clearTaskLease, loadGlyphQueue, loadTaskLease, saveGlyphQueue, saveTaskLease } from '@/lib/taskLease'
 import { currentUserId as getCurrentUserId } from '@/services/authService'
 import {
   claimNextProjectPage,
@@ -876,13 +876,14 @@ async function submitProofread() {
     )
 
     try {
-      const nextPage = await claimNextProjectPage(projectId, userId, page.value.id)
+      const nextPage = await claimNextProjectPage(projectId, userId, page.value.id, '', glyphQueueFor(projectId))
       if (nextPage?.id) {
         saveClaimedLease(nextPage)
         setTaskFlash(window.sessionStorage, saved.value)
         await router.push(`/tasks/${nextPage.id}/edit`)
         return
       }
+      clearGlyphQueue(projectId)
       saved.value += ' 当前项目暂无下一条可由你处理的任务。'
     } catch (claimError) {
       claimNextFailure.value = true
@@ -903,7 +904,7 @@ async function retryClaimNext() {
   if (retryingClaim.value || !page.value || !currentUserId.value) return
   retryingClaim.value = true
   try {
-    const nextPage = await claimNextProjectPage(page.value.project, currentUserId.value, page.value.id)
+    const nextPage = await claimNextProjectPage(page.value.project, currentUserId.value, page.value.id, '', glyphQueueFor(page.value.project))
     if (nextPage?.id) {
       saveClaimedLease(nextPage)
       setTaskFlash(window.sessionStorage, saved.value)
@@ -920,6 +921,14 @@ async function retryClaimNext() {
   } finally {
     retryingClaim.value = false
   }
+}
+
+function glyphQueueFor(projectId) {
+  return loadGlyphQueue(window.sessionStorage, { userId: currentUserId.value, projectId })
+}
+
+function clearGlyphQueue(projectId) {
+  saveGlyphQueue(window.sessionStorage, { userId: currentUserId.value, projectId, glyph: false })
 }
 
 function saveClaimedLease(claimedPage) {
@@ -1016,7 +1025,7 @@ async function reclaimTask() {
   reclaiming.value = true
   flushDraft()
   try {
-    const claimedPage = await claimNextProjectPage(page.value.project, currentUserId.value)
+    const claimedPage = await claimNextProjectPage(page.value.project, currentUserId.value, '', '', glyphQueueFor(page.value.project))
     if (!claimedPage?.id || !saveClaimedLease(claimedPage)) {
       markLeaseLost('当前项目暂无可重新领取的任务，本地草稿仍然保留。')
       return
