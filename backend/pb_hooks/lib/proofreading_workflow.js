@@ -148,6 +148,14 @@ function evaluatePage(dao, page) {
     const source = attempts[0]
     page.set("proofread_row_json", source.getString("row_json"))
     page.set("proofread_text", source.getString("text"))
+    // 缺字已补：正式采纳的内容不再含 @N 时，退出缺字待登记队列。
+    // 只清自动状态（missing_glyph），不碰人工 blocked_reason。
+    if (page.getBool("missing_glyph")) {
+      const { PLACEHOLDER } = require(`${__hooks}/lib/assist_rules.js`)
+      if (!(source.getString("text") || "").match(PLACEHOLDER)) {
+        page.set("missing_glyph", false)
+      }
+    }
     page.set("proofread_at", String(source.get("submitted_at") || new Date().toISOString()))
     page.set("status", "approved")
     const context = fidelity.parse(source.getString("verification_context_json"))

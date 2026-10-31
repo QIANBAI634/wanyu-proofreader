@@ -304,7 +304,7 @@ import {
 import { CLAIM_NEXT_FAILURE_NOTICE, IRREVERSIBLE_SUBMIT_NOTICE } from '@/lib/proofreadNotices'
 import { RESEARCH_NOTICE_COPY } from '@/lib/researchNoticeCopy'
 import { chooseResearchNotice as saveResearchNotice, getResearchNotice } from '@/services/researchNoticeService'
-import { formatClaimConflict, getPbMessage } from '@/utils/pbErrors'
+import { formatClaimConflict, getPbMessage, getPbStatus } from '@/utils/pbErrors'
 
 const route = useRoute()
 const router = useRouter()
@@ -886,8 +886,15 @@ async function submitProofread() {
       clearGlyphQueue(projectId)
       saved.value += ' 当前项目暂无下一条可由你处理的任务。'
     } catch (claimError) {
-      claimNextFailure.value = true
-      console.warn('Failed to claim next page after successful proofread submit:', claimError)
+      // 缺字专队耗尽（后端 404）要明确结束，而不是卡在"自动领取失败/重试"里循环。
+      if (glyphQueueFor(projectId) && getPbStatus(claimError) === 404) {
+        clearGlyphQueue(projectId)
+        claimNextFailure.value = false
+        saved.value += ' 缺字待登记队列已清空。'
+      } else {
+        claimNextFailure.value = true
+        console.warn('Failed to claim next page after successful proofread submit:', claimError)
+      }
     }
 
   } catch (e) {
@@ -917,7 +924,13 @@ async function retryClaimNext() {
       saved.value += ' 当前项目暂无下一条可由你处理的任务。'
     }
   } catch (claimError) {
-    console.warn('Failed to retry claim after proofread submit:', claimError)
+    if (glyphQueueFor(page.value.project) && getPbStatus(claimError) === 404) {
+      clearGlyphQueue(page.value.project)
+      claimNextFailure.value = false
+      saved.value = '缺字待登记队列已清空。'
+    } else {
+      console.warn('Failed to retry claim after proofread submit:', claimError)
+    }
   } finally {
     retryingClaim.value = false
   }
