@@ -19,7 +19,6 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
     requiredProofreads: proofRequiredProofreads,
     evaluatePage: proofEvaluatePage
   } = require(`${__hooks}/lib/proofreading_workflow.js`)
-  const { BLOCKED_BUCKETS: proofBlockedBuckets } = require(`${__hooks}/lib/assist_difficulty.js`)
   const auth = c.auth
   if (!auth) throw new ForbiddenError("无权执行此操作")
   if (auth.getBool("must_change_password")) throw new ForbiddenError("首次登录请先修改密码")
@@ -43,15 +42,14 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
   const userId = auth.id
   const projectId = c.request.pathValue("projectId")
   let response = null
-  const claimBody = new DynamicModel({ previousTaskId: "", tier: "", blocked: "" })
+  const claimBody = new DynamicModel({ previousTaskId: "", tier: "", glyph: false })
   if (c.request.contentLength !== 0) c.bindBody(claimBody)
   const previousTaskId = String(claimBody.previousTaskId || "")
   // #162：层级是白名单值，不是自由文本——它会参与筛选，也不该被拿来拼过滤表达式。
   const tier = String(claimBody.tier || "").trim()
   if (tier && !["A", "B", "C"].includes(tier)) throw new BadRequestError("难度层级只能是 A、B 或 C")
-  // 阻塞原因同理是白名单值（glyph_table 等），用于「缺字待登记」这类单独队列。
-  const blocked = String(claimBody.blocked || "").trim()
-  if (blocked && !proofBlockedBuckets.includes(blocked)) throw new BadRequestError("阻塞原因筛选无效")
+  // 缺字待登记是布尔筛选：只领 missing_glyph=true 的条目，与 tier 正交（两者可同时给）。
+  const glyph = Boolean(claimBody.glyph)
 
   $app.runInTransaction((txDao) => {
     try {
@@ -124,7 +122,7 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
           // 层级筛选必须在 seen 之前：先记 seen 会让第二层把整批跳过，
           // 结果"优先 A"变成"只看 A，别的层级一条都领不到"。
           if (passTier && page.getString("difficulty_tier") !== passTier) continue
-          if (blocked && page.getString("blocked_reason") !== blocked) continue
+          if (glyph && !page.getBool("missing_glyph")) continue
           if (seen.has(page.id)) continue
           seen.add(page.id)
           const status = page.getString("status")
@@ -152,7 +150,7 @@ routerAdd("POST", `${FANGJI_API}/projects/{projectId}/claim`, (c) => {
         }
       }
     }
-    if (!response && blocked) throw new NotFoundError("该阻塞原因队列暂时没有可领取的条目")
+    if (!response && glyph) throw new NotFoundError("缺字待登记队列暂时没有可领取的条目")
     if (!response && tier) throw new NotFoundError(`${tier} 级暂时没有可领取的条目`)
   })
 
@@ -411,6 +409,7 @@ routerAdd("POST", `${FANGJI_API}/pages/{pageId}/submit`, (c) => {
     proofreadAttempts: proofAttempts,
     evaluatePage: proofEvaluatePage
   } = require(`${__hooks}/lib/proofreading_workflow.js`)
+  const { PLACEHOLDER: proofPlaceholder } = require(`${__hooks}/lib/assist_rules.js`)
   const auth = c.auth
   if (!auth) throw new ForbiddenError("无权执行此操作")
   if (auth.getBool("must_change_password")) throw new ForbiddenError("首次登录请先修改密码")
@@ -507,6 +506,11 @@ routerAdd("POST", `${FANGJI_API}/pages/{pageId}/submit`, (c) => {
       page.set("second_proofread_at", now)
     }
     page.set("proofread_at", now)
+    // 缺字已补：提交内容不再含 @N 占位符时退出缺字待登记队列。
+    // 只清自动状态（missing_glyph），不碰人工 blocked_reason 结论。
+    if (page.getBool("missing_glyph") && !(text || "").match(proofPlaceholder)) {
+      page.set("missing_glyph", false)
+    }
     const evaluation = proofEvaluatePage(txDao, page)
     response = {
       id: pageId,

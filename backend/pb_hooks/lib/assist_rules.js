@@ -492,6 +492,7 @@ function runProjectRules(ctx, entries) {
 
 module.exports = {
   RULES_VERSION,
+  PLACEHOLDER,
   ANCHOR_ENTRY,
   ANCHOR_COLUMN,
   ANCHOR_PDF_PAGE,

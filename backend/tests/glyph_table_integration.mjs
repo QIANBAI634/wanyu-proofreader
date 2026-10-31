@@ -22,7 +22,6 @@ const token = admin.token
 
 const project = await api('/api/fangji/projects', { method: 'POST', token, body: { name: '缺字待登记夹具' }, status: 201 })
 
-// 建一个 proofreader，加进项目。
 const reader = await api('/api/collections/users/records', {
   method: 'POST', token, body: {
     email: 'glyph-reader@example.com', name: '缺字校对员', role: 'user',
@@ -52,26 +51,46 @@ for (let i = 0; i < 100; i++) {
   await new Promise((resolve) => setTimeout(resolve, 100))
 }
 
-// 检测：含 @N 的那条自动标 glyph_table，正常的那条不标。
+// 检测：含 @N 的那条 missing_glyph=true，正常那条 false。
 const pages = await api(`/api/collections/pages/records?filter=${encodeURIComponent(`project="${project.id}"`)}`, { token })
 assert.equal(pages.items.length, 2)
 const glyphPage = pages.items.find((p) => (p.ocr_text || '').includes('@98969'))
 const normalPage = pages.items.find((p) => !(p.ocr_text || '').includes('@98969'))
-assert.equal(glyphPage.blocked_reason, 'glyph_table')
-assert.equal(normalPage.blocked_reason || '', '')
+assert.equal(glyphPage.missing_glyph, true)
+assert.equal(normalPage.missing_glyph, false)
 
-// 队列摘要：blocked.glyph_table 计数 = 1（只有一条缺字）。
 const readerAuth = await api('/api/collections/users/auth-with-password', {
   method: 'POST', body: { identity: 'glyph-reader@example.com', password: 'GlyphReader12345!' }
 })
+
+// 队列摘要：missingGlyph 计数 = 1。
 const queues = await api('/api/fangji/proofreading-queues', { token: readerAuth.token })
 const queue = queues.items.find((q) => q.project.id === project.id)
-assert.equal(queue.blocked.glyph_table, 1)
+assert.equal(queue.missingGlyph, 1)
 
-// 派发：proofreader 用 blocked='glyph_table' 只领到缺字那条。
+// 派发：proofreader 用 glyph=true 只领到缺字那条。
 const claimed = await api(`/api/fangji/projects/${project.id}/claim`, {
-  method: 'POST', token: readerAuth.token, body: { blocked: 'glyph_table' }
+  method: 'POST', token: readerAuth.token, body: { glyph: true }
 })
 assert.equal(claimed.id, glyphPage.id)
 
-console.log('PASS: glyph placeholder rows are stamped glyph_table, counted, and claimable as a dedicated queue')
+// 人工结论保留：平台管理员手动登记一个 blocked_reason，自动缺字状态清除时不得覆盖它。
+await api(`/api/fangji/pages/${glyphPage.id}/blocked-reason`, {
+  method: 'PUT', token, body: { reason: 'scanned_read', basis: '扫描页需要人工识读' }
+})
+
+// 修正后退队：proofreader 提交不含 @N 的修正，missing_glyph 应被清除、人工 blocked_reason 保留。
+await api(`/api/fangji/pages/${glyphPage.id}/submit`, {
+  method: 'POST', token: readerAuth.token,
+  body: { rowJson: JSON.stringify({ 词头: '甲', 释义: '有缺字(已补)' }), text: '甲 有缺字(已补)', leaseToken: claimed.leaseToken }
+})
+const afterFix = await api(`/api/collections/pages/records/${glyphPage.id}`, { token })
+assert.equal(afterFix.missing_glyph, false)
+assert.equal(afterFix.blocked_reason, 'scanned_read')
+
+// 缺字队列计数归 0。
+const queuesAfter = await api('/api/fangji/proofreading-queues', { token: readerAuth.token })
+const queueAfter = queuesAfter.items.find((q) => q.project.id === project.id)
+assert.equal(queueAfter.missingGlyph, 0)
+
+console.log('PASS: glyph rows are detected as missing_glyph, claimable as a dedicated queue, and cleared on fix without touching the manual blocked reason')

@@ -69,6 +69,30 @@ func TestNewRequestID(t *testing.T) {
 	}
 }
 
+// 占位符正则防漂：Go 的 glyphPlaceholderRe 与 assist_rules.js 的 PLACEHOLDER 各写一份，
+// 这里读 JS 源码比对，避免一边改口径另一边没跟。
+func TestGlyphPlaceholderRegexMatchesJS(t *testing.T) {
+	raw, err := os.ReadFile("pb_hooks/lib/assist_rules.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	marker := "const PLACEHOLDER = /"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatal("assist_rules.js 里找不到 PLACEHOLDER 定义")
+	}
+	literal := text[start+len(marker):]
+	end := strings.Index(literal, "/")
+	if end < 0 {
+		t.Fatal("PLACEHOLDER 正则没有闭合")
+	}
+	jsPattern := literal[:end]
+	if got, want := glyphPlaceholderRe.String(), jsPattern; got != want {
+		t.Fatalf("Go 占位符正则 %q 与 assist_rules.js 的 %q 漂移", got, want)
+	}
+}
+
 func TestIsDiscardableImportPage(t *testing.T) {
 	tests := []struct {
 		name              string

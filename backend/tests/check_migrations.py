@@ -54,6 +54,11 @@ SPECS = {
             'skipped_count': {'required': False},
         }),
     },
+    '1792800000_page_missing_glyph.js': {
+        'fields': ('pages', {
+            'missing_glyph': {'required': False},
+        }),
+    },
     '1791580800_unique_nickname_login.js': {
         'indexes': ['idx_users_nickname'],
         'collection_indexes': ('users', 'idx_users_nickname'),
