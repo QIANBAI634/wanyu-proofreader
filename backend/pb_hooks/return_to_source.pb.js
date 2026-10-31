@@ -28,6 +28,15 @@ routerAdd("POST", "/api/fangji/pages/{pageId}/return-to-source", (c) => {
     if (!basis) throw new BadRequestError("请填写退回依据（一句话说明哪里对不上）")
     const context = fidelity.contextFor(dao, page)
     fidelity.appendEvent(dao, { project: context.project, page: page.id, kind: "returned_to_source", actor: c.auth.id, context, payload: { reason, basis: basis.slice(0, 2000), from_status: page.getString("status") } })
+    // 返工轮次：退回后递增 proofread_round，旧轮 attempt 留在旧轮，不污染返工后的双人盲校
+    // quorum。旧轮里还处于 waiting 的 attempt 收尾成 mismatched，避免留下「进行中」的孤儿状态。
+    const round = page.getInt("proofread_round") || 1
+    page.set("proofread_round", round + 1)
+    const oldWaiting = dao.findRecordsByFilter("proofreading_attempts", `page = "${page.id}" && round = ${round} && kind = "proofread" && outcome = "waiting"`, "", 100, 0)
+    for (const attempt of oldWaiting) {
+      attempt.set("outcome", "mismatched")
+      dao.save(attempt)
+    }
     leases.clearLease(dao, page)
     page.set("proofreader", null)
     page.set("status", "rework")

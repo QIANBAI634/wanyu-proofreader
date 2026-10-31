@@ -105,4 +105,40 @@ assert.equal(ack.items.length, 1)
 const ledgerAfter = await api(`/api/fangji/projects/${project.id}/import-ledger`, { token })
 assert.equal(ledgerAfter.summary.rework_count, 0)
 
-console.log('PASS: downstream return-to-source sets rework, leaves trace, is counted in ledger, excludes from claim, and resolve returns to pending with an acknowledgement')
+// 回归：返工轮次不得污染双人盲校 quorum。
+// 校对员甲在 round=2 提交一份 → 退回（round 递增到 3）→ resolve 回 pending →
+// 校对员乙在 round=3 提交一份。此时 round=3 只有乙这一份，不应触发 approved。
+const reader2 = await api('/api/collections/users/records', {
+  method: 'POST', token, body: {
+    email: 'return-reader2@example.com', name: '退回校对员乙', role: 'user',
+    password: 'ReturnReader2!', passwordConfirm: 'ReturnReader2!'
+  }
+})
+await api(`/api/fangji/projects/${project.id}/members/${reader2.id}`, { method: 'PUT', token, body: { role: 'proofreader' } })
+const reader2Auth = await api('/api/collections/users/auth-with-password', {
+  method: 'POST', body: { identity: 'return-reader2@example.com', password: 'ReturnReader2!' }
+})
+
+// 甲提交一份（round=2）。
+const claimA = await api(`/api/fangji/projects/${project.id}/claim`, { method: 'POST', token: readerAuth.token })
+await api(`/api/fangji/pages/${page.id}/submit`, {
+  method: 'POST', token: readerAuth.token,
+  body: { rowJson: JSON.stringify({ 词头: '甲', 释义: '已补' }), text: '甲 已补', leaseToken: claimA.leaseToken }
+})
+assert.equal((await api(`/api/collections/pages/records/${page.id}`, { token })).status, 'proofread')
+
+// 退回（round → 3）再 resolve 回 pending。
+await api(`/api/fangji/pages/${page.id}/return-to-source`, { method: 'POST', token, body: { reason: 'text_mismatch', basis: '再核对' } })
+await api(`/api/fangji/pages/${page.id}/resolve-return`, { method: 'POST', token, body: { disposition: 'processed' } })
+
+// 乙提交一份（round=3）：旧 round=2 的甲那份不得参与，不能 approved。
+const claimB = await api(`/api/fangji/projects/${project.id}/claim`, { method: 'POST', token: reader2Auth.token })
+await api(`/api/fangji/pages/${page.id}/submit`, {
+  method: 'POST', token: reader2Auth.token,
+  body: { rowJson: JSON.stringify({ 词头: '甲', 释义: '已补' }), text: '甲 已补', leaseToken: claimB.leaseToken }
+})
+const afterSecond = await api(`/api/collections/pages/records/${page.id}`, { token })
+assert.equal(afterSecond.status, 'proofread')
+assert.equal(afterSecond.proofread_round, 3)
+
+console.log('PASS: downstream return-to-source sets rework, leaves trace, is counted in ledger, excludes from claim, resolve returns to pending with an acknowledgement, and the return round does not pollute the next blind proofread quorum')

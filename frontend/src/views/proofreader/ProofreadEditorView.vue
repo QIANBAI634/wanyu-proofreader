@@ -389,8 +389,9 @@ const returnModalOpen = ref(false)
 const returnReason = ref('')
 const returnBasis = ref('')
 const returning = ref(false)
-const queueMode = ref(loadQueueMode(window.localStorage))
-const returnQueue = ref(loadReturnQueue(window.localStorage))
+// 队列与开关按 userId 隔离，打开退回弹窗时再读（那时 currentUserId 已可用）。
+const queueMode = ref(false)
+const returnQueue = ref([])
 const renewingLease = ref(false)
 const leaseNavigationAllowed = ref(false)
 const submittedHere = ref(false)
@@ -992,6 +993,8 @@ function clearGlyphQueue(projectId) {
 function openReturnModal() {
   returnReason.value = ''
   returnBasis.value = ''
+  queueMode.value = loadQueueMode(window.localStorage, currentUserId.value)
+  returnQueue.value = loadReturnQueue(window.localStorage, currentUserId.value)
   returnModalOpen.value = true
 }
 
@@ -1000,7 +1003,7 @@ function closeReturnModal() {
 }
 
 function persistQueueMode() {
-  saveQueueMode(window.localStorage, queueMode.value)
+  saveQueueMode(window.localStorage, queueMode.value, currentUserId.value)
 }
 
 async function confirmReturn() {
@@ -1010,7 +1013,7 @@ async function confirmReturn() {
     // 队列模式：只暂存，不真退。
     if (!returnQueue.value.some((q) => q.pageId === item.pageId)) {
       returnQueue.value = [...returnQueue.value, item]
-      saveReturnQueue(window.localStorage, returnQueue.value)
+      saveReturnQueue(window.localStorage, returnQueue.value, currentUserId.value)
     }
     closeReturnModal()
     return
@@ -1032,15 +1035,24 @@ async function batchReturn() {
   if (!returnQueue.value.length || returning.value) return
   returning.value = true
   try {
-    const queue = returnQueue.value
-    for (const item of queue) {
-      await returnToSource(item.pageId, { reason: item.reason, basis: item.basis })
+    // 逐条退：成功即出队；400/403 表示这条已不属于本人可退范围（已退回/已提交），也出队；
+    // 其它失败保留在队列里，稍后重试。不能因一条失败就整队列卡死。
+    const remaining = []
+    let failedCount = 0
+    for (const item of returnQueue.value) {
+      try {
+        await returnToSource(item.pageId, { reason: item.reason, basis: item.basis })
+      } catch (e) {
+        const status = getPbStatus(e)
+        if (status === 400 || status === 403) continue
+        failedCount++
+        remaining.push(item)
+      }
     }
-    returnQueue.value = []
-    saveReturnQueue(window.localStorage, [])
+    returnQueue.value = remaining
+    saveReturnQueue(window.localStorage, remaining, currentUserId.value)
     closeReturnModal()
-  } catch (e) {
-    saveError.value = getPbMessage(e, '批量退回未全部完成，请重试')
+    if (failedCount) saveError.value = `${failedCount} 条退回失败，已保留在队列中，可稍后重试。`
   } finally {
     returning.value = false
   }
