@@ -41,6 +41,12 @@
             @click="releaseCurrentTask"
           >{{ releasing ? '释放中…' : '释放任务' }}</button>
           <button
+            v-if="page && !submittedHere && !leaseLost"
+            class="btn btn-quiet btn-sm"
+            :disabled="saving || !leaseToken"
+            @click="openReturnModal"
+          >退回</button>
+          <button
             class="btn btn-success btn-sm"
             @click="openSubmitReview"
             :disabled="saving || loadingPage || !page || leaseLost || !leaseToken"
@@ -254,6 +260,37 @@
         </button>
       </template>
     </AppModal>
+
+    <AppModal :open="returnModalOpen" title-id="return-modal-title" mark="退" @close="closeReturnModal">
+      <div class="page-eyebrow">退回给资料接入</div>
+      <h2 id="return-modal-title">退回第 {{ page?.page_number }} 条</h2>
+      <p class="text-sm text-muted">说明这条为什么需要资料接入重新处理。退回后它会从校对队列消失，进入「待返工」。</p>
+      <label class="form-group">
+        <span class="form-label">退回理由</span>
+        <select v-model="returnReason" class="form-control">
+          <option value="" disabled>请选择理由</option>
+          <option v-for="r in RETURN_REASONS" :key="r.value" :value="r.value">{{ r.label }}</option>
+        </select>
+      </label>
+      <label class="form-group mt-3">
+        <span class="form-label">退回依据（必填）</span>
+        <textarea v-model="returnBasis" class="form-control" rows="3" placeholder="一句话说明哪里对不上，例如：第三列释义和原书第 606 页对不上"></textarea>
+      </label>
+      <label class="form-label mt-3"><input v-model="queueMode" type="checkbox" @change="persistQueueMode"> 队列模式（先攒着，稍后一键全部退回）</label>
+      <p v-if="returnQueue.length" class="text-sm text-muted mt-2">
+        退回队列里已有 {{ returnQueue.length }} 条。
+        <button type="button" class="btn btn-quiet btn-sm" @click="batchReturn">全部退回</button>
+      </p>
+      <template #actions>
+        <button type="button" class="btn btn-secondary" @click="closeReturnModal">取消</button>
+        <button
+          type="button"
+          class="btn btn-danger"
+          :disabled="returning || !returnReason || !returnBasis.trim()"
+          @click="confirmReturn"
+        >{{ returning ? '退回中…' : (queueMode ? '加入退回队列' : '立即退回') }}</button>
+      </template>
+    </AppModal>
 </template>
 
 <script setup>
@@ -299,8 +336,10 @@ import {
   listProofreaderNeighborTasks,
   releaseTaskLease,
   renewTaskLease,
+  returnToSource,
   submitTwoPassProofread
 } from '@/services/pagesService'
+import { RETURN_REASONS, loadQueueMode, loadReturnQueue, saveQueueMode, saveReturnQueue } from '@/lib/returnQueue'
 import { CLAIM_NEXT_FAILURE_NOTICE, IRREVERSIBLE_SUBMIT_NOTICE } from '@/lib/proofreadNotices'
 import { RESEARCH_NOTICE_COPY } from '@/lib/researchNoticeCopy'
 import { chooseResearchNotice as saveResearchNotice, getResearchNotice } from '@/services/researchNoticeService'
@@ -346,6 +385,12 @@ const activeSelection = ref({ field: '', start: null, end: null })
 const leaseToken = ref('')
 const leaseExpiresAt = ref('')
 const leaseLost = ref(false)
+const returnModalOpen = ref(false)
+const returnReason = ref('')
+const returnBasis = ref('')
+const returning = ref(false)
+const queueMode = ref(loadQueueMode(window.localStorage))
+const returnQueue = ref(loadReturnQueue(window.localStorage))
 const renewingLease = ref(false)
 const leaseNavigationAllowed = ref(false)
 const submittedHere = ref(false)
@@ -942,6 +987,80 @@ function glyphQueueFor(projectId) {
 
 function clearGlyphQueue(projectId) {
   saveGlyphQueue(window.sessionStorage, { userId: currentUserId.value, projectId, glyph: false })
+}
+
+function openReturnModal() {
+  returnReason.value = ''
+  returnBasis.value = ''
+  returnModalOpen.value = true
+}
+
+function closeReturnModal() {
+  returnModalOpen.value = false
+}
+
+function persistQueueMode() {
+  saveQueueMode(window.localStorage, queueMode.value)
+}
+
+async function confirmReturn() {
+  if (!page.value?.id || returning.value || !returnReason.value || !returnBasis.value.trim()) return
+  const item = { pageId: page.value.id, reason: returnReason.value, basis: returnBasis.value.trim() }
+  if (queueMode.value) {
+    // 队列模式：只暂存，不真退。
+    if (!returnQueue.value.some((q) => q.pageId === item.pageId)) {
+      returnQueue.value = [...returnQueue.value, item]
+      saveReturnQueue(window.localStorage, returnQueue.value)
+    }
+    closeReturnModal()
+    return
+  }
+  returning.value = true
+  try {
+    await returnToSource(item.pageId, { reason: item.reason, basis: item.basis })
+    closeReturnModal()
+    // 退回后这条任务退出，尝试领下一条（沿用缺字队列选择）。
+    await claimNextAfterReturn()
+  } catch (e) {
+    saveError.value = getPbMessage(e, '退回失败，请重试')
+  } finally {
+    returning.value = false
+  }
+}
+
+async function batchReturn() {
+  if (!returnQueue.value.length || returning.value) return
+  returning.value = true
+  try {
+    const queue = returnQueue.value
+    for (const item of queue) {
+      await returnToSource(item.pageId, { reason: item.reason, basis: item.basis })
+    }
+    returnQueue.value = []
+    saveReturnQueue(window.localStorage, [])
+    closeReturnModal()
+  } catch (e) {
+    saveError.value = getPbMessage(e, '批量退回未全部完成，请重试')
+  } finally {
+    returning.value = false
+  }
+}
+
+async function claimNextAfterReturn() {
+  const projectId = page.value?.project
+  if (!projectId || !currentUserId.value) return
+  try {
+    const next = await claimNextProjectPage(projectId, currentUserId.value, '', '', glyphQueueFor(projectId))
+    if (next?.id) {
+      saveClaimedLease(next)
+      await router.push(`/tasks/${next.id}/edit`)
+      return
+    }
+    clearGlyphQueue(projectId)
+    await router.push('/tasks')
+  } catch {
+    await router.push('/tasks')
+  }
 }
 
 function saveClaimedLease(claimedPage) {

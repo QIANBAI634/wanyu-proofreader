@@ -120,6 +120,14 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 		return apis.NewBadRequestError("读取未知来源行数失败。", err)
 	}
 
+	// 待返工条数 = 下游退回 A 线、status='rework' 的条目数。
+	var reworkCount int
+	if err := s.app.DB().NewQuery(
+		`SELECT COUNT(*) FROM pages WHERE project = {:project} AND status = 'rework'`,
+	).Bind(params).Row(&reworkCount); err != nil {
+		return apis.NewBadRequestError("读取待返工条数失败。", err)
+	}
+
 	// 输入行数从批次列表就地汇总：所有批次 total_count 之和（含跳过的输入行）。
 	totalBatches := len(batches)
 	totalRows := 0
@@ -163,6 +171,7 @@ func (s *importService) projectImportLedger(c *core.RequestEvent) error {
 			"total_rows":          totalRows,
 			"imported_rows":       importedRows,
 			"unknown_source_rows": unknownSourceRows,
+			"rework_count":        reworkCount,
 			"sources":             sources,
 		},
 	})

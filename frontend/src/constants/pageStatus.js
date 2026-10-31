@@ -6,7 +6,8 @@ export const PAGE_STATUS = Object.freeze({
   ARBITRATION: 'arbitration',
   REVIEWING: 'reviewing',
   APPROVED: 'approved',
-  REJECTED: 'rejected'
+  REJECTED: 'rejected',
+  REWORK: 'rework'
 })
 
 export const PAGE_STATUS_LABELS = Object.freeze({
@@ -17,7 +18,8 @@ export const PAGE_STATUS_LABELS = Object.freeze({
   [PAGE_STATUS.ARBITRATION]: '待仲裁',
   [PAGE_STATUS.REVIEWING]: '历史处理中',
   [PAGE_STATUS.APPROVED]: '校对完成',
-  [PAGE_STATUS.REJECTED]: '已退回'
+  [PAGE_STATUS.REJECTED]: '不适用',
+  [PAGE_STATUS.REWORK]: '待返工'
 })
 
 export const PROOFREADER_ACTIVE_STATUSES = Object.freeze([

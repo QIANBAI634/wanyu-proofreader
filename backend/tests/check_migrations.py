@@ -59,6 +59,11 @@ SPECS = {
             'missing_glyph': {'required': False},
         }),
     },
+    '1792800100_page_rework_status.js': {
+        'fields': ('pages', {
+            'status': {'values_contains': 'rework'},
+        }),
+    },
     '1791580800_unique_nickname_login.js': {
         'indexes': ['idx_users_nickname'],
         'collection_indexes': ('users', 'idx_users_nickname'),

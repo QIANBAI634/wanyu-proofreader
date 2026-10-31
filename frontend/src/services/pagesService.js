@@ -177,6 +177,14 @@ export async function releaseTaskLease(pageId, leaseToken) {
   })
 }
 
+export async function returnToSource(pageId, { reason, basis }) {
+  return pb.send(`/api/fangji/pages/${encodeURIComponent(pageId)}/return-to-source`, {
+    method: 'POST',
+    body: { reason, basis },
+    requestKey: null
+  })
+}
+
 export async function submitTwoPassProofread(pageId, userId, { rowJson, text, leaseToken, ...verification }) {
   if (!pageId || !userId) throw new Error('缺少任务或校对员身份')
   return pb.send(`/api/fangji/pages/${encodeURIComponent(pageId)}/submit`, {
