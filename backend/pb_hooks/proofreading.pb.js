@@ -409,7 +409,6 @@ routerAdd("POST", `${FANGJI_API}/pages/{pageId}/submit`, (c) => {
     proofreadAttempts: proofAttempts,
     evaluatePage: proofEvaluatePage
   } = require(`${__hooks}/lib/proofreading_workflow.js`)
-  const { PLACEHOLDER: proofPlaceholder } = require(`${__hooks}/lib/assist_rules.js`)
   const auth = c.auth
   if (!auth) throw new ForbiddenError("无权执行此操作")
   if (auth.getBool("must_change_password")) throw new ForbiddenError("首次登录请先修改密码")
@@ -508,11 +507,6 @@ routerAdd("POST", `${FANGJI_API}/pages/{pageId}/submit`, (c) => {
       page.set("second_proofread_at", now)
     }
     page.set("proofread_at", now)
-    // 缺字已补：提交内容不再含 @N 占位符时退出缺字待登记队列。
-    // 只清自动状态（missing_glyph），不碰人工 blocked_reason 结论。
-    if (page.getBool("missing_glyph") && !(text || "").match(proofPlaceholder)) {
-      page.set("missing_glyph", false)
-    }
     const evaluation = proofEvaluatePage(txDao, page)
     response = {
       id: pageId,

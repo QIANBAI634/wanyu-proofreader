@@ -153,6 +153,11 @@ func (s *importService) setPageContent(c *core.RequestEvent) error {
 	page.Set("ocr_row_json", strings.TrimSpace(payload.RowJSON))
 	page.Set("ocr_text", text)
 	page.Set("row_headers_json", strings.TrimSpace(payload.HeadersJSON))
+	// 管理员修正原文后，若不再含 @N 缺字占位符，退出缺字待登记队列（只清自动状态，
+	// 不碰人工 blocked_reason）。缺字是否补上以「原文内容」为准，不是校对员的草稿提交。
+	if page.GetBool("missing_glyph") && !glyphPlaceholderRe.MatchString(text) {
+		page.Set("missing_glyph", false)
+	}
 	page.Set("fidelity_change_actor", c.Auth.Id)
 	if err := s.app.Save(page); err != nil {
 		return apis.NewBadRequestError("保存修正内容失败。", err)
