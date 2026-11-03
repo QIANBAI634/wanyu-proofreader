@@ -45,3 +45,24 @@ export function saveQueueMode(storage, enabled, userId) {
   if (enabled) storage.setItem(returnQueueModeKey(userId), '1')
   else storage.removeItem(returnQueueModeKey(userId))
 }
+
+// 退回请求返回这些状态时，条目已不属于本人可退范围（已退回/已提交/已删除），
+// 留在队列里只会永远失败，直接出队。
+const DROP_STATUSES = new Set([400, 403, 404])
+
+// 逐条退：成功即出队；400/403/404 直接出队；其它失败保留，稍后重试。
+// 返回剩余队列与失败条数，让调用方落盘并提示。
+export async function flushReturnQueue(queue, submit, statusOf) {
+  const remaining = []
+  let failedCount = 0
+  for (const item of queue) {
+    try {
+      await submit(item)
+    } catch (error) {
+      if (DROP_STATUSES.has(statusOf(error))) continue
+      failedCount += 1
+      remaining.push(item)
+    }
+  }
+  return { remaining, failedCount }
+}

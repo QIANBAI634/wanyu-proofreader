@@ -339,7 +339,7 @@ import {
   returnToSource,
   submitTwoPassProofread
 } from '@/services/pagesService'
-import { RETURN_REASONS, loadQueueMode, loadReturnQueue, saveQueueMode, saveReturnQueue } from '@/lib/returnQueue'
+import { RETURN_REASONS, flushReturnQueue, loadQueueMode, loadReturnQueue, saveQueueMode, saveReturnQueue } from '@/lib/returnQueue'
 import { CLAIM_NEXT_FAILURE_NOTICE, IRREVERSIBLE_SUBMIT_NOTICE } from '@/lib/proofreadNotices'
 import { RESEARCH_NOTICE_COPY } from '@/lib/researchNoticeCopy'
 import { chooseResearchNotice as saveResearchNotice, getResearchNotice } from '@/services/researchNoticeService'
@@ -1035,20 +1035,11 @@ async function batchReturn() {
   if (!returnQueue.value.length || returning.value) return
   returning.value = true
   try {
-    // 逐条退：成功即出队；400/403 表示这条已不属于本人可退范围（已退回/已提交），也出队；
-    // 其它失败保留在队列里，稍后重试。不能因一条失败就整队列卡死。
-    const remaining = []
-    let failedCount = 0
-    for (const item of returnQueue.value) {
-      try {
-        await returnToSource(item.pageId, { reason: item.reason, basis: item.basis })
-      } catch (e) {
-        const status = getPbStatus(e)
-        if (status === 400 || status === 403) continue
-        failedCount++
-        remaining.push(item)
-      }
-    }
+    const { remaining, failedCount } = await flushReturnQueue(
+      returnQueue.value,
+      (item) => returnToSource(item.pageId, { reason: item.reason, basis: item.basis }),
+      getPbStatus
+    )
     returnQueue.value = remaining
     saveReturnQueue(window.localStorage, remaining, currentUserId.value)
     closeReturnModal()

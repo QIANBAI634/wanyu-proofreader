@@ -127,8 +127,25 @@ await api(`/api/fangji/pages/${page.id}/submit`, {
 })
 assert.equal((await api(`/api/collections/pages/records/${page.id}`, { token })).status, 'proofread')
 
+// 只有甲这一份、还没有第二份可比较：一致率分母必须为 0。
+const statsBeforeReturn = await api('/api/fangji/proofreader-stats', { token: readerAuth.token })
+assert.equal(statsBeforeReturn.workflowEvaluatedCount, 0)
+assert.equal(statsBeforeReturn.matchRate, null)
+
 // 退回（round → 3）再 resolve 回 pending。
 await api(`/api/fangji/pages/${page.id}/return-to-source`, { method: 'POST', token, body: { reason: 'text_mismatch', basis: '再核对' } })
+
+// 返工让旧轮 waiting 失效，但这不是一次「不一致」：stats 分母仍为 0，不能惩罚发现问题的校对员。
+const statsAfterReturn = await api('/api/fangji/proofreader-stats', { token: readerAuth.token })
+assert.equal(statsAfterReturn.workflowEvaluatedCount, 0)
+assert.equal(statsAfterReturn.matchRate, null)
+assert.equal(statsAfterReturn.matchRank, null)
+const oldAttempts = await api(`/api/collections/proofreading_attempts/records?filter=${encodeURIComponent(`page="${page.id}" && round=2`)}`, { token: superAuth.token })
+assert.equal(oldAttempts.items.length, 1)
+assert.equal(oldAttempts.items[0].outcome, 'superseded')
+
+// 处理方式只接受 processed / ignored，其它值不静默降级。
+await api(`/api/fangji/pages/${page.id}/resolve-return`, { method: 'POST', token, body: { disposition: 'delete' }, status: 400 })
 await api(`/api/fangji/pages/${page.id}/resolve-return`, { method: 'POST', token, body: { disposition: 'processed' } })
 
 // 乙提交一份（round=3）：旧 round=2 的甲那份不得参与，不能 approved。

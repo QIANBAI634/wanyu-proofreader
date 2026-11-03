@@ -29,12 +29,13 @@ routerAdd("POST", "/api/fangji/pages/{pageId}/return-to-source", (c) => {
     const context = fidelity.contextFor(dao, page)
     fidelity.appendEvent(dao, { project: context.project, page: page.id, kind: "returned_to_source", actor: c.auth.id, context, payload: { reason, basis: basis.slice(0, 2000), from_status: page.getString("status") } })
     // 返工轮次：退回后递增 proofread_round，旧轮 attempt 留在旧轮，不污染返工后的双人盲校
-    // quorum。旧轮里还处于 waiting 的 attempt 收尾成 mismatched，避免留下「进行中」的孤儿状态。
+    // quorum。旧轮里还处于 waiting 的 attempt 收尾成 superseded：保留审计记录，但不计入
+    // 一致率分母——它从未被第二份校对比较过，不能算一次「不一致」。
     const round = page.getInt("proofread_round") || 1
     page.set("proofread_round", round + 1)
     const oldWaiting = dao.findRecordsByFilter("proofreading_attempts", `page = "${page.id}" && round = ${round} && kind = "proofread" && outcome = "waiting"`, "", 100, 0)
     for (const attempt of oldWaiting) {
-      attempt.set("outcome", "mismatched")
+      attempt.set("outcome", "superseded")
       dao.save(attempt)
     }
     leases.clearLease(dao, page)
@@ -53,7 +54,8 @@ routerAdd("POST", "/api/fangji/pages/{pageId}/resolve-return", (c) => {
     const { page, manager } = api.pageAccess(dao, c.request.pathValue("pageId"), c.auth)
     if (!manager) throw new ForbiddenError("只有管理员可以处理退回")
     if (page.getString("status") !== "rework") throw new BadRequestError("该条目不在待返工状态")
-    const disposition = body.disposition === "ignored" ? "ignored" : "processed"
+    const disposition = String(body.disposition || "")
+    if (disposition !== "processed" && disposition !== "ignored") throw new BadRequestError("处理方式无效")
     const context = fidelity.contextFor(dao, page)
     fidelity.appendEvent(dao, { project: context.project, page: page.id, kind: "return_acknowledged", actor: c.auth.id, context, payload: { disposition, note: String(body.note || "").slice(0, 2000) } })
     page.set("status", "pending")
